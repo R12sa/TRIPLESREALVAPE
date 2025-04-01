@@ -11,7 +11,7 @@ end
 local function downloadFile(path, func)
     if not isfile(path) then
         local suc, res = pcall(function()
-            return game:HttpGet('https://raw.githubusercontent.com/R12sa/TRIPLESREALVAPE.git/' .. readfile('newvape/profiles/commit.txt') .. '/' .. select(1, path:gsub('newvape/', '')), true)
+            return game:HttpGet('https://raw.githubusercontent.com/R12sa/TRIPLESREALVAPE/' .. readfile('newvape/profiles/commit.txt') .. '/' .. select(1, path:gsub('newvape/', '')), true)
         end)
         if not suc or res == '404: Not Found' then
             warn("Failed to download file: " .. tostring(res))
@@ -43,7 +43,7 @@ end
 
 if not shared.VapeDeveloper then
     local _, subbed = pcall(function()
-        return game:HttpGet('https://github.com/R12sa/TRIPLESREALVAPE.git')
+        return game:HttpGet('https://github.com/R12sa/TRIPLESREALVAPE')
     end)
     if subbed then
         local commit = subbed:find('currentOid')
