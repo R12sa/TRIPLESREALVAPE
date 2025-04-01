@@ -1,11 +1,9 @@
 -- crashprevention script (in beta rn) gonna make it better as time goes on
-
 local runService = game:GetService("RunService")
 local players = game:GetService("Players")
 local httpService = game:GetService("HttpService")
 local teleportService = game:GetService("TeleportService")
 local localPlayer = players.LocalPlayer
-
 local lastHeartbeat = tick()
 local crashLog = {}
 local fpsDropTime = 0
