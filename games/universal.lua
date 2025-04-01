@@ -1,21 +1,23 @@
 local loadstring = function(...)
-	local res, err = loadstring(...)
-	if err and vape then
-		vape:CreateNotification('Vape', 'Failed to load : '..err, 30, 'alert')
-	end
-	return res
+    local res, err = loadstring(...)
+    if err and vape then
+        vape:CreateNotification('Vape', 'Failed to load : '..err, 30, 'alert')
+    end
+    return res
 end
+
 local isfile = isfile or function(file)
-	local suc, res = pcall(function()
-		return readfile(file)
-	end)
-	return suc and res ~= nil and res ~= ''
+    local suc, res = pcall(function()
+        return readfile(file)
+    end)
+    return suc and res ~= nil and res ~= ''
 end
+
 local function downloadFile(path, func)
-	if not isfile(path) then
-		local suc, res = pcall(function()
-			return game:HttpGet('https://raw.githubusercontent.com/pifaifiohawiohh8924920904444ffsfszcz/DHOHDOAHDA-HDDDA/'..readfile('newvape/profiles/commit.txt')..'/'..select(1, path:gsub('newvape/', '')), true)
-		end)
+    if not isfile(path) then
+        local suc, res = pcall(function()
+            return game:HttpGet('https://raw.githubusercontent.com/R12sa/TRIPLESREALVAPE/'..readfile('newvape/profiles/commit.txt')..'/'..select(1, path:gsub('newvape/', '')), true)
+        end)
 		if not suc or res == '404: Not Found' then
 			error(res)
 		end
@@ -592,93 +594,36 @@ run(function()
 		end
 	end
 
-	function whitelist:update(first)
-		local suc = pcall(function()
-			local _, subbed = pcall(function()
-				return game:HttpGet('https://github.com/wrealaero/whitelists/tree/main')
-			end)
-			local commit = subbed:find('currentOid')
-			commit = commit and subbed:sub(commit + 13, commit + 52) or nil
-			commit = commit and #commit == 40 and commit or 'main'
-			whitelist.textdata = game:HttpGet('https://raw.githubusercontent.com/wrealaero/whitelists/'..commit..'/t.json', true)
-		end)
-		if not suc or not hash or not whitelist.get then return true end
-		whitelist.loaded = true
-
-		if not first or whitelist.textdata ~= whitelist.olddata then
-			if not first then
-				whitelist.olddata = isfile('newvape/profiles/whitelist.json') and readfile('newvape/profiles/whitelist.json') or nil
-			end
-
-			local suc, res = pcall(function()
-				return httpService:JSONDecode(whitelist.textdata)
-			end)
-
-			whitelist.data = suc and type(res) == 'table' and res or whitelist.data
-			whitelist.localprio = whitelist:get(lplr)
-
-			for _, v in whitelist.data.WhitelistedUsers do
-				if v.tags then
-					for _, tag in v.tags do
-						tag.color = Color3.fromRGB(unpack(tag.color))
-					end
-				end
-			end
-
-			if not whitelist.connection then
-				whitelist.connection = playersService.PlayerAdded:Connect(function(v)
-					whitelist:playeradded(v, true)
-				end)
-				vape:Clean(whitelist.connection)
-			end
-
-			for _, v in playersService:GetPlayers() do
-				whitelist:playeradded(v)
-			end
-
-			if entitylib.Running and vape.Loaded then
-				entitylib.refresh()
-			end
-
-			if whitelist.textdata ~= whitelist.olddata then
-				whitelist.olddata = whitelist.textdata
-
-				local suc, res = pcall(function()
-					return httpService:JSONDecode(whitelist.textdata)
-				end)
-	
-				whitelist.data = suc and type(res) == 'table' and res or whitelist.data
-				whitelist.localprio = whitelist:get(lplr)
-
-				pcall(function()
-					writefile('newvape/profiles/whitelist.json', whitelist.textdata)
-				end)
-			end
-
-			if whitelist.data.Announcement.expiretime > os.time() then
-				local targets = whitelist.data.Announcement.targets
-				targets = targets == 'all' and {tostring(lplr.UserId)} or targets:split(',')
-
-				if table.find(targets, tostring(lplr.UserId)) then
-					local hint = Instance.new('Hint')
-					hint.Text = 'VAPE ANNOUNCEMENT: '..whitelist.data.Announcement.text
-					hint.Parent = workspace
-					game:GetService('Debris'):AddItem(hint, 20)
-				end
-			end
-
-			if whitelist.data.KillVape then
-				vape:Uninject()
-				return true
-			end
-
-			if whitelist.data.BlacklistedUsers[tostring(lplr.UserId)] then
-				task.spawn(lplr.kick, lplr, whitelist.data.BlacklistedUsers[tostring(lplr.UserId)])
-				return true
-			end
-		end
-	end
-
+	local loadstring = function(...)
+        local res, err = loadstring(...)
+        if err and vape then
+            vape:CreateNotification('Vape', 'Failed to load : '..err, 30, 'alert')
+        end
+        return res
+    end
+    
+    local isfile = isfile or function(file)
+        local suc, res = pcall(function()
+            return readfile(file)
+        end)
+        return suc and res ~= nil and res ~= ''
+    end
+    
+    local function downloadFile(path, func)
+        if not isfile(path) then
+            local suc, res = pcall(function()
+                return game:HttpGet('https://raw.githubusercontent.com/R12sa/TRIPLESREALVAPE/'..readfile('newvape/profiles/commit.txt')..'/'..select(1, path:gsub('newvape/', '')), true)
+            end)
+            if not suc or res == '404: Not Found' then
+                error(res)
+            end
+            if path:find('.lua') then
+                res = '--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.\n'..res
+            end
+            writefile(path, res)
+        end
+        return (func or readfile)(path)
+    end    
 	whitelist.commands = {
 		-- byfron = function()
 		-- 	while wait() do
