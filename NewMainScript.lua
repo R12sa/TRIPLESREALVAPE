@@ -1,3 +1,11 @@
+local old_require = require
+getgenv().require = function(path)
+    setthreadidentity(2)
+    local _ = old_require(path)
+    setthreadidentity(8)
+    return _
+end
+
 -- Check if file-related functions exist and wrap them safely
 local isfile = isfile or function(file)
     local suc, res = pcall(function() return readfile(file) end)
