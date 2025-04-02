@@ -4,6 +4,7 @@ local players = game:GetService("Players")
 local httpService = game:GetService("HttpService")
 local teleportService = game:GetService("TeleportService")
 local localPlayer = players.LocalPlayer
+
 local lastHeartbeat = tick()
 local crashLog = {}
 local fpsDropTime = 0
