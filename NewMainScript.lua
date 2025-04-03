@@ -43,62 +43,140 @@ local function wipeFolder(path)
     end
 end
 
+-- Create necessary folders
 for _, folder in pairs({'newvape', 'newvape/games', 'newvape/profiles', 'newvape/assets', 'newvape/libraries', 'newvape/guis'}) do
     if not isfolder(folder) then
         pcall(function() makefolder(folder) end)
     end
 end
 
-if not shared.VapeDeveloper then
-    local retries = 3
-    local subbed
-    
-    while retries > 0 do
-        local success, response = pcall(function()
-            return game:HttpGet('https://github.com/R12sa/TRIPLESREALVAPE')
-        end)
+-- Function to load the main script
+local function loadMainScript()
+    if not shared.VapeDeveloper then
+        local retries = 3
+        local subbed
         
-        if success and response then
-            subbed = response
-            break
+        while retries > 0 do
+            local success, response = pcall(function()
+                return game:HttpGet('https://github.com/R12sa/TRIPLESREALVAPE')
+            end)
+            
+            if success and response then
+                subbed = response
+                break
+            end
+            
+            retries = retries - 1
+            wait(1)
         end
         
-        retries = retries - 1
-        wait(1)
+        if subbed then
+            local commit = subbed:find('currentOid')
+            commit = commit and subbed:sub(commit + 13, commit + 52) or nil
+            commit = commit and #commit == 40 and commit or 'main'
+            
+            if commit == 'main' or (isfile('newvape/profiles/commit.txt') and readfile('newvape/profiles/commit.txt') or '') ~= commit then
+                wipeFolder('newvape')
+                wipeFolder('newvape/games')
+                wipeFolder('newvape/guis')
+                wipeFolder('newvape/libraries')
+            end
+            
+            pcall(function() writefile('newvape/profiles/commit.txt', commit) end)
+        end
     end
-    
-    if subbed then
-        local commit = subbed:find('currentOid')
-        commit = commit and subbed:sub(commit + 13, commit + 52) or nil
-        commit = commit and #commit == 40 and commit or 'main'
-        
-        if commit == 'main' or (isfile('newvape/profiles/commit.txt') and readfile('newvape/profiles/commit.txt') or '') ~= commit then
-            wipeFolder('newvape')
-            wipeFolder('newvape/games')
-            wipeFolder('newvape/guis')
-            wipeFolder('newvape/libraries')
-        end
-        
-        pcall(function() writefile('newvape/profiles/commit.txt', commit) end)
+
+    -- Load script safely
+    local success, err = pcall(function()
+        loadstring(downloadFile('newvape/main.lua'), 'main')()
+    end)
+
+    if not success then
+        warn("Failed to load script: " .. tostring(err))
+        game.StarterGui:SetCore("SendNotification", {
+            Title = "Error",
+            Text = "Failed to load script: " .. tostring(err),
+            Duration = 5
+        })
+        return false
+    else
+        game.StarterGui:SetCore("SendNotification", {
+            Title = "Success",
+            Text = "Shop script loaded successfully!",
+            Duration = 2
+        })
+        return true
     end
 end
 
--- Load script safely
-local success, err = pcall(function()
-    loadstring(downloadFile('newvape/main.lua'), 'main')()
+-- Track current place ID to detect game changes
+local currentPlaceId = game.PlaceId
+local shopLoaded = false
+
+-- Initial load
+shopLoaded = loadMainScript()
+
+-- Auto-reinjection when player teleports or game changes
+game:GetService("Players").LocalPlayer.OnTeleport:Connect(function(state)
+    if state == Enum.TeleportState.Started then
+        -- Queue script to run after teleport
+        syn = syn or {}
+        if syn.queue_on_teleport then
+            syn.queue_on_teleport([[
+                repeat wait() until game:IsLoaded()
+                loadstring(game:HttpGet('https://raw.githubusercontent.com/R12sa/TRIPLESREALVAPE/main/loader.lua'))()
+            ]])
+        end
+    end
 end)
 
-if not success then
-    warn("Failed to load script: " .. tostring(err))
-    game.StarterGui:SetCore("SendNotification", {
-        Title = "Error",
-        Text = "Failed to load script: " .. tostring(err),
-        Duration = 5
-    })
-else
-    game.StarterGui:SetCore("SendNotification", {
-        Title = "Success",
-        Text = "Script loaded successfully!",
-        Duration = 2
-    })
-end
+-- Check for game changes (for games that change PlaceId without full teleport)
+game:GetService("RunService").Heartbeat:Connect(function()
+    if game.PlaceId ~= currentPlaceId then
+        currentPlaceId = game.PlaceId
+        -- Game changed, reload the script
+        task.wait(5) -- Wait for game to fully load
+        shopLoaded = loadMainScript()
+    end
+    
+    -- If we're in a lobby and shop isn't loaded, try to load it
+    if not shopLoaded and game:GetService("Players").LocalPlayer and game:GetService("Players").LocalPlayer.Character then
+        -- Check if we're in a lobby (you may need to adjust this logic based on the specific game)
+        local inLobby = false
+        
+        -- Example lobby detection (customize for your specific game)
+        if game.PlaceId == 6872265039 or -- Example lobby PlaceId
+           game.PlaceId == 6872274481 or -- Another example lobby PlaceId
+           game:GetService("Players").LocalPlayer:FindFirstChild("InLobby") then
+            inLobby = true
+        end
+        
+        if inLobby then
+            shopLoaded = loadMainScript()
+        end
+    end
+end)
+
+-- Reset shop loaded state when character dies/respawns (common in round-based games)
+game:GetService("Players").LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(2) -- Wait for character to fully load
+    if not shopLoaded then
+        shopLoaded = loadMainScript()
+    end
+end)
+
+-- Handle game state changes (for games with round systems)
+local gameStateChanged = false
+game:GetService("RunService").Heartbeat:Connect(function()
+    -- Example: Check for round state changes (customize for your specific game)
+    local gameState = game:GetService("ReplicatedStorage"):FindFirstChild("GameState")
+    if gameState then
+        local currentState = gameState.Value
+        if currentState == "Lobby" and not gameStateChanged then
+            gameStateChanged = true
+            shopLoaded = loadMainScript()
+        elseif currentState ~= "Lobby" then
+            gameStateChanged = false
+        end
+    end
+end)
