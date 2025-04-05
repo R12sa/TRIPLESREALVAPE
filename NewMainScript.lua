@@ -1,215 +1,304 @@
--- Vape Shop Hook - Ensures the require hook is in place before Vape loads
--- This script should be executed once and will persist across game changes
+-- Shop Fix for MacSploit/Nexus42
+-- This script ensures the shop works even after clicking "Play Again"
 
--- Create a flag to track if we've already set up the hook
-if not getgenv().VapeShopHookInitialized then
-    getgenv().VapeShopHookInitialized = true
-    
-    -- Store the original require function
-    local original_require = require
-    
-    -- Create our hook function
-    getgenv().require = function(path)
-        setthreadidentity(2)
-        local result = original_require(path)
-        setthreadidentity(8)
-        return result
-    end
-    
-    -- Function to check if file exists
-    local isfile = isfile or function(file)
-        local success, result = pcall(function() return readfile(file) end)
-        return success and result ~= nil and result ~= ''
-    end
-    
-    -- Function to delete file
-    local delfile = delfile or function(file)
-        pcall(function() writefile(file, '') end)
-    end
-    
-    -- Function to download file
-    local function downloadFile(path, func)
-        if not isfile(path) then
-            local success, result = pcall(function()
-                return game:HttpGet('https://raw.githubusercontent.com/R12sa/TRIPLESREALVAPE/' .. readfile('newvape/profiles/commit.txt') .. '/' .. select(1, path:gsub('newvape/', '')), true)
-            end)
-            if not success or result == '404: Not Found' then
-                warn("Failed to download file: " .. tostring(result))
-                return nil
-            end
-            if path:find('.lua') then
-                result = '--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.\n' .. result
-            end
-            pcall(function() writefile(path, result) end)
-        end
-        return (func or readfile)(path)
-    end
-    
-    -- Function to wipe folder
-    local function wipeFolder(path)
-        if not isfolder(path) then return end
-        for _, file in pairs(listfiles(path)) do
-            if file:find('loader') then continue end
-            if isfile(file) and select(1, readfile(file):find('--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.')) == 1 then
-                delfile(file)
-            end
-        end
-    end
-    
-    -- Create necessary folders
-    for _, folder in pairs({'newvape', 'newvape/games', 'newvape/profiles', 'newvape/assets', 'newvape/libraries', 'newvape/guis'}) do
-        if not isfolder(folder) then
-            pcall(function() makefolder(folder) end)
-        end
-    end
-    
-    -- Function to load the main script
-    local function loadShopScript()
-        if not shared.VapeDeveloper then
-            local retries = 3
-            local subbed
-            
-            while retries > 0 do
-                local success, response = pcall(function()
-                    return game:HttpGet('https://github.com/R12sa/TRIPLESREALVAPE')
-                end)
-                
-                if success and response then
-                    subbed = response
-                    break
-                end
-                
-                retries = retries - 1
-                wait(1)
-            end
-            
-            if subbed then
-                local commit = subbed:find('currentOid')
-                commit = commit and subbed:sub(commit + 13, commit + 52) or nil
-                commit = commit and #commit == 40 and commit or 'main'
-                
-                if commit == 'main' or (isfile('newvape/profiles/commit.txt') and readfile('newvape/profiles/commit.txt') or '') ~= commit then
-                    wipeFolder('newvape')
-                    wipeFolder('newvape/games')
-                    wipeFolder('newvape/guis')
-                    wipeFolder('newvape/libraries')
-                end
-                
-                pcall(function() writefile('newvape/profiles/commit.txt', commit) end)
-            end
-        end
-        
-        -- Load script safely
-        local success, err = pcall(function()
-            loadstring(downloadFile('newvape/main.lua'), 'main')()
+-- Store original require function
+local original_require = require
+
+-- Create our hook function that will persist
+getgenv().require = function(path)
+    setthreadidentity(2)
+    local result = original_require(path)
+    setthreadidentity(8)
+    return result
+end
+
+-- Create a flag to track if shop is loaded in current session
+getgenv().shopLoaded = false
+
+-- Basic file functions
+local function isfile_safe(file)
+    local success, result = pcall(function() return readfile(file) end)
+    return success and result ~= nil and result ~= ''
+end
+
+local function delfile_safe(file)
+    pcall(function() writefile(file, '') end)
+end
+
+-- Download file from repository
+local function downloadFile(path)
+    if not isfile_safe(path) then
+        local success, result = pcall(function()
+            local commit = isfile_safe('newvape/profiles/commit.txt') and readfile('newvape/profiles/commit.txt') or 'main'
+            return game:HttpGet('https://raw.githubusercontent.com/R12sa/TRIPLESREALVAPE/' .. commit .. '/' .. path:gsub('newvape/', ''), true)
         end)
         
-        if not success then
-            warn("Failed to load shop script: " .. tostring(err))
-            game.StarterGui:SetCore("SendNotification", {
-                Title = "Error",
-                Text = "Failed to load shop script",
-                Duration = 5
-            })
-            return false
+        if not success or result == '404: Not Found' then
+            warn("Failed to download: " .. path)
+            return nil
+        end
+        
+        if path:find('.lua') then
+            result = '--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.\n' .. result
+        end
+        
+        pcall(function() writefile(path, result) end)
+    end
+    
+    return readfile(path)
+end
+
+-- Create folders if they don't exist
+for _, folder in pairs({'newvape', 'newvape/games', 'newvape/profiles', 'newvape/assets', 'newvape/libraries', 'newvape/guis'}) do
+    if not isfolder(folder) then
+        pcall(function() makefolder(folder) end)
+    end
+end
+
+-- Get latest commit
+local function getLatestCommit()
+    local success, response = pcall(function()
+        return game:HttpGet('https://github.com/R12sa/TRIPLESREALVAPE')
+    end)
+    
+    if success and response then
+        local commit = response:find('currentOid')
+        commit = commit and response:sub(commit + 13, commit + 52) or nil
+        return commit and #commit == 40 and commit or 'main'
+    end
+    
+    return 'main'
+end
+
+-- Wipe cached files
+local function wipeCache()
+    for _, folder in pairs({'newvape', 'newvape/games', 'newvape/guis', 'newvape/libraries'}) do
+        if isfolder(folder) then
+            for _, file in pairs(listfiles(folder)) do
+                if file:find('loader') then continue end
+                if isfile_safe(file) and readfile(file):find('--This watermark is used to delete the file if its cached') then
+                    delfile_safe(file)
+                end
+            end
+        end
+    end
+end
+
+-- Load shop script
+local function loadShop()
+    -- Prevent multiple loads
+    if getgenv().shopLoaded then return true end
+    
+    -- Check for commit changes
+    local commit = getLatestCommit()
+    local oldCommit = isfile_safe('newvape/profiles/commit.txt') and readfile('newvape/profiles/commit.txt') or nil
+    
+    -- If commit changed, wipe cache
+    if commit ~= oldCommit then
+        wipeCache()
+        pcall(function() writefile('newvape/profiles/commit.txt', commit) end)
+    end
+    
+    -- Load main script
+    local success, err = pcall(function()
+        local mainScript = downloadFile('newvape/main.lua')
+        if mainScript then
+            loadstring(mainScript, 'main')()
         else
-            game.StarterGui:SetCore("SendNotification", {
-                Title = "Success",
-                Text = "Shop loaded successfully!",
-                Duration = 2
-            })
-            return true
+            error("Failed to download main script")
         end
+    end)
+    
+    if success then
+        getgenv().shopLoaded = true
+        game.StarterGui:SetCore("SendNotification", {
+            Title = "Shop Loaded",
+            Text = "Shop is now available!",
+            Duration = 2
+        })
+        return true
+    else
+        warn("Failed to load shop: " .. tostring(err))
+        game.StarterGui:SetCore("SendNotification", {
+            Title = "Shop Error",
+            Text = "Failed to load shop. Try again.",
+            Duration = 5
+        })
+        return false
     end
+end
+
+-- Function to detect game state changes
+local function setupGameStateDetection()
+    -- Track current game/place
+    local currentGame = game.PlaceId
     
-    -- Set up auto-injection for game changes
-    
-    -- 1. Handle teleports
-    local function setupTeleportHook()
-        game:GetService("Players").LocalPlayer.OnTeleport:Connect(function(state)
-            if state == Enum.TeleportState.Started then
-                -- Queue our hook to run immediately after teleport
-                local queueScript = [[
-                    repeat wait() until game:IsLoaded()
-                    
-                    -- Set up the require hook first
-                    local original_require = require
-                    getgenv().require = function(path)
-                        setthreadidentity(2)
-                        local result = original_require(path)
-                        setthreadidentity(8)
-                        return result
-                    end
-                    
-                    -- Then load the full script
+    -- Check for teleports
+    game:GetService("Players").LocalPlayer.OnTeleport:Connect(function(state)
+        if state == Enum.TeleportState.Started then
+            -- Queue our script to run after teleport
+            if syn and syn.queue_on_teleport then
+                syn.queue_on_teleport([[
+                    repeat wait() until game:IsLoaded() and game:GetService("Players").LocalPlayer
                     loadstring(game:HttpGet('https://raw.githubusercontent.com/R12sa/TRIPLESREALVAPE/main/loader.lua'))()
-                ]]
-                
-                -- Use the appropriate queue function based on executor
-                if syn and syn.queue_on_teleport then
-                    syn.queue_on_teleport(queueScript)
-                elseif queue_on_teleport then
-                    queue_on_teleport(queueScript)
+                ]])
+            end
+        end
+    end)
+    
+    -- Reset shop loaded state when character spawns
+    game:GetService("Players").LocalPlayer.CharacterAdded:Connect(function()
+        task.wait(1) -- Wait for game to stabilize
+        getgenv().shopLoaded = false
+        loadShop()
+    end)
+    
+    -- Monitor for "Play Again" button clicks (detect by checking UI)
+    local function checkForPlayAgainClick()
+        local playAgainDetected = false
+        
+        -- Check common UI elements that might indicate "Play Again" was clicked
+        for _, ui in pairs(game:GetService("Players").LocalPlayer:GetDescendants()) do
+            if ui:IsA("TextButton") and (ui.Text:find("Play Again") or ui.Text:find("Lobby")) then
+                if ui.Visible and not playAgainDetected then
+                    ui.MouseButton1Click:Connect(function()
+                        task.wait(2) -- Wait for transition
+                        getgenv().shopLoaded = false
+                        loadShop()
+                    end)
+                    playAgainDetected = true
                 end
             end
-        end)
-    end
-    
-    -- 2. Handle game loaded events
-    local function onGameLoaded()
-        -- Wait for game to fully load
-        if not game:IsLoaded() then
-            game.Loaded:Wait()
         end
         
-        -- Wait for local player
-        if not game:GetService("Players").LocalPlayer then
-            game:GetService("Players"):GetPropertyChangedSignal("LocalPlayer"):Wait()
+        -- Also check CoreGui
+        for _, ui in pairs(game:GetService("CoreGui"):GetDescendants()) do
+            if ui:IsA("TextButton") and (ui.Text:find("Play Again") or ui.Text:find("Lobby")) then
+                if ui.Visible and not playAgainDetected then
+                    ui.MouseButton1Click:Connect(function()
+                        task.wait(2) -- Wait for transition
+                        getgenv().shopLoaded = false
+                        loadShop()
+                    end)
+                    playAgainDetected = true
+                end
+            end
         end
-        
-        -- Set up teleport hook
-        setupTeleportHook()
-        
-        -- Load shop script
-        loadShopScript()
     end
     
-    -- Run initial setup
-    onGameLoaded()
-    
-    -- Set up a hook for when the character is added (for respawns/round changes)
-    game:GetService("Players").LocalPlayer.CharacterAdded:Connect(function()
-        -- Small delay to ensure Vape has a chance to load first
-        task.wait(1)
-        
-        -- Make sure our hook is still in place
-        if require ~= getgenv().require then
-            -- If our hook was overwritten, restore it
-            require = getgenv().require
-            
-            -- And reload the shop
-            loadShopScript()
+    -- Check UI periodically
+    spawn(function()
+        while wait(5) do
+            pcall(checkForPlayAgainClick)
         end
     end)
     
     -- Monitor for game state changes
-    local gameStateChanged = false
-    game:GetService("RunService").Heartbeat:Connect(function()
-        -- Check for game state changes that might indicate returning to lobby
-        local gameState = game:GetService("ReplicatedStorage"):FindFirstChild("GameState")
-        if gameState and gameState.Value == "Lobby" and not gameStateChanged then
-            gameStateChanged = true
+    spawn(function()
+        while wait(2) do
+            -- Check if game changed
+            if game.PlaceId ~= currentGame then
+                currentGame = game.PlaceId
+                getgenv().shopLoaded = false
+                task.wait(5) -- Wait for game to load
+                loadShop()
+            end
             
-            -- Make sure our hook is still in place
+            -- Check for common game state indicators
+            local gameState = game:GetService("ReplicatedStorage"):FindFirstChild("GameState")
+            if gameState and gameState.Value == "Lobby" then
+                if not getgenv().shopLoaded then
+                    loadShop()
+                end
+            end
+            
+            -- Force reload shop if require hook was overwritten
             if require ~= getgenv().require then
                 require = getgenv().require
-                loadShopScript()
+                getgenv().shopLoaded = false
+                loadShop()
             end
-        elseif gameState and gameState.Value ~= "Lobby" then
-            gameStateChanged = false
+        end
+    end)
+end
+
+-- Direct fix for MacSploit/Nexus42 issues
+local function applyMacSploitFix()
+    -- Create a global function that can be called from anywhere
+    getgenv().reloadShop = function()
+        getgenv().shopLoaded = false
+        return loadShop()
+    end
+    
+    -- Create a UI button to manually reload shop if needed
+    pcall(function()
+        local screenGui = Instance.new("ScreenGui")
+        screenGui.Name = "ShopReloader"
+        screenGui.ResetOnSpawn = false
+        
+        -- Try to parent to CoreGui for persistence
+        pcall(function() screenGui.Parent = game:GetService("CoreGui") end)
+        if not screenGui.Parent then screenGui.Parent = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui") end
+        
+        -- Create reload button
+        local button = Instance.new("TextButton")
+        button.Size = UDim2.new(0, 100, 0, 30)
+        button.Position = UDim2.new(0, 10, 0, 10)
+        button.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+        button.TextColor3 = Color3.fromRGB(255, 255, 255)
+        button.Text = "Reload Shop"
+        button.BorderSizePixel = 0
+        button.Parent = screenGui
+        
+        -- Add rounded corners
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 8)
+        corner.Parent = button
+        
+        -- Add click handler
+        button.MouseButton1Click:Connect(function()
+            getgenv().reloadShop()
+        end)
+    end)
+    
+    -- Hook into key game events that might indicate a round restart
+    
+    -- 1. Monitor workspace changes
+    workspace.ChildAdded:Connect(function(child)
+        if child.Name == "Lobby" or child.Name == "Intermission" then
+            task.wait(1)
+            getgenv().shopLoaded = false
+            loadShop()
         end
     end)
     
-    -- Print confirmation
-    print("Vape Shop Hook initialized - require function is now hooked")
+    -- 2. Monitor player state changes
+    game:GetService("Players").LocalPlayer.PlayerGui.ChildAdded:Connect(function(child)
+        if child.Name:find("Lobby") or child.Name:find("Menu") then
+            task.wait(1)
+            getgenv().shopLoaded = false
+            loadShop()
+        end
+    end)
+    
+    -- 3. Create a periodic force check
+    spawn(function()
+        while wait(15) do
+            if not getgenv().shopLoaded then
+                loadShop()
+            end
+        end
+    end)
 end
+
+-- Run everything
+loadShop()
+setupGameStateDetection()
+applyMacSploitFix()
+
+-- Notify user
+game.StarterGui:SetCore("SendNotification", {
+    Title = "Shop Fix",
+    Text = "Shop fix is active! Press the Reload Shop button if needed.",
+    Duration = 5
+})
