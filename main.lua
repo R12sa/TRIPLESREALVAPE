@@ -2,9 +2,6 @@
 repeat task.wait() until game:IsLoaded()
 if shared.vape then shared.vape:Uninject() end
 
--- Loading the crash prevention script
-loadstring(game:HttpGet("https://raw.githubusercontent.com/R12sa/TRIPLESREALVAPE/main/CrashPrevention.lua"))()
-
 -- why do exploits fail to implement anything correctly? Is it really that hard?
 if identifyexecutor then
     if table.find({'Argon', 'Wave'}, ({identifyexecutor()})[1]) then
@@ -101,7 +98,7 @@ if not isfolder('newvape/assets/'..gui) then
 end
 
 vape = loadstring(downloadFile('newvape/guis/'..gui..'.lua'), 'gui')()
--- shared.vape = vape
+shared.vape = vape
 
 local XFunctions = loadstring(downloadFile('newvape/libraries/XFunctions.lua'), 'XFunctions')()
 XFunctions:SetGlobalData('XFunctions', XFunctions)
