@@ -16,76 +16,133 @@ local delfile = delfile or function(file)
     pcall(function() writefile(file, '') end)
 end
 
-local function downloadFile(path, func)
-    if not isfile(path) then
-        local suc, res = pcall(function()
-            return game:HttpGet('https://raw.githubusercontent.com/R12sa/TRIPLESREALVAPE/' .. readfile('newvape/profiles/commit.txt') .. '/' .. select(1, path:gsub('newvape/', '')), true)
-        end)
-        if not suc or res == '404: Not Found' then
-            warn("Failed to download file: " .. tostring(res))
-            return nil
-        end
-        if path:find('.lua') then
-            res = '--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.\n' .. res
-        end
-        pcall(function() writefile(path, res) end)
-    end
-    return (func or readfile)(path)
-end
-
-local function wipeFolder(path)
-    if not isfolder(path) then return end
-    for _, file in pairs(listfiles(path)) do
-        if file:find('loader') then continue end
-        if isfile(file) and select(1, readfile(file):find('--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.')) == 1 then
-            delfile(file)
-        end
-    end
-end
-
+-- Create folders first
 for _, folder in pairs({'newvape', 'newvape/games', 'newvape/profiles', 'newvape/assets', 'newvape/libraries', 'newvape/guis'}) do
     if not isfolder(folder) then
         pcall(function() makefolder(folder) end)
     end
 end
 
-if not shared.VapeDeveloper then
-    local retries = 3
-    local subbed
-    
-    while retries > 0 do
-        local success, response = pcall(function()
-            return game:HttpGet('https://github.com/R12sa/TRIPLESREALVAPE')
+-- Set default commit if needed
+if not isfile('newvape/profiles/commit.txt') then
+    pcall(function() writefile('newvape/profiles/commit.txt', 'main') end)
+end
+
+local function downloadFile(path, func)
+    if not isfile(path) then
+        local commit = 'main'
+        pcall(function() commit = readfile('newvape/profiles/commit.txt') end)
+        
+        local suc, res = pcall(function()
+            return game:HttpGet('https://raw.githubusercontent.com/R12sa/TRIPLESREALVAPE/' .. commit .. '/' .. select(1, path:gsub('newvape/', '')), true)
         end)
         
-        if success and response then
-            subbed = response
-            break
+        if not suc or res == '404: Not Found' then
+            warn("Failed to download file: " .. tostring(res))
+            return nil
         end
         
-        retries = retries - 1
-        wait(1)
+        if path:find('.lua') then
+            res = '--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.\n' .. res
+        end
+        
+        pcall(function() writefile(path, res) end)
     end
     
-    if subbed then
+    local readSuc, content = pcall(function() return (func or readfile)(path) end)
+    if not readSuc then
+        warn("Failed to read file: " .. path)
+        return nil
+    end
+    
+    return content
+end
+
+local function wipeFolder(path)
+    if not isfolder(path) then return end
+    
+    local listSuc, files = pcall(function() return listfiles(path) end)
+    if not listSuc then return end
+    
+    for _, file in pairs(files) do
+        if file:find('loader') then continue end
+        
+        local readSuc, content = pcall(function() return readfile(file) end)
+        if readSuc and content and content:find('--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.') == 1 then
+            delfile(file)
+        end
+    end
+end
+
+-- Update files if needed
+if not shared.VapeDeveloper then
+    local commitSuc, subbed = pcall(function()
+        return game:HttpGet('https://github.com/R12sa/TRIPLESREALVAPE')
+    end)
+    
+    if commitSuc and subbed then
         local commit = subbed:find('currentOid')
         commit = commit and subbed:sub(commit + 13, commit + 52) or nil
         commit = commit and #commit == 40 and commit or 'main'
         
-        if commit == 'main' or (isfile('newvape/profiles/commit.txt') and readfile('newvape/profiles/commit.txt') or '') ~= commit then
+        local oldCommit = ''
+        pcall(function() 
+            if isfile('newvape/profiles/commit.txt') then
+                oldCommit = readfile('newvape/profiles/commit.txt')
+            end
+        end)
+        
+        if commit == 'main' or oldCommit ~= commit then
             wipeFolder('newvape')
             wipeFolder('newvape/games')
             wipeFolder('newvape/guis')
             wipeFolder('newvape/libraries')
+            
+            pcall(function() writefile('newvape/profiles/commit.txt', commit) end)
         end
-        
-        pcall(function() writefile('newvape/profiles/commit.txt', commit) end)
     end
 end
 
--- Load script safely
+-- Download main.lua
+local mainContent = downloadFile('newvape/main.lua')
+
+if not mainContent then
+    warn("Failed to download main.lua")
+    game.StarterGui:SetCore("SendNotification", {
+        Title = "Error",
+        Text = "Failed to download main script",
+        Duration = 5
+    })
+    return
+end
+
+-- Fix for the SetGlobalData error
+local fixedContent = mainContent:gsub("(%w+)%.SetGlobalData", function(varName)
+    return "if " .. varName .. " and " .. varName .. ".SetGlobalData then " .. varName .. ".SetGlobalData"
+end)
+
+-- Add global data fallback
+fixedContent = [[
+-- Global data fallback
+if not shared.GlobalData then
+    shared.GlobalData = {}
+end
+
+getgenv().SetGlobalData = function(key, value)
+    if not shared.GlobalData then shared.GlobalData = {} end
+    shared.GlobalData[key] = value
+end
+
+getgenv().GetGlobalData = function(key)
+    if not shared.GlobalData then return nil end
+    return shared.GlobalData[key]
+end
+
+]] .. fixedContent
+
+-- Load the fixed script
 local success, err = pcall(function()
-    loadstring(downloadFile('newvape/main.lua'), 'main')()
+    loadstring(fixedContent, 'main')()
 end)
 
 if not success then
