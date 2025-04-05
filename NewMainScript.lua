@@ -1,11 +1,70 @@
-local old_require = require
-getgenv().require = function(path)
-    setthreadidentity(2)
-    local _ = old_require(path)
-    setthreadidentity(8)
-    return _
+-- Set up error handling
+local function handleError(err, stage)
+    warn("Error at " .. stage .. ": " .. tostring(err))
+    game.StarterGui:SetCore("SendNotification", {
+        Title = "Error at " .. stage,
+        Text = tostring(err),
+        Duration = 5
+    })
 end
 
+-- Try to set up require hook
+local success, err = pcall(function()
+    local old_require = require
+    getgenv().require = function(path)
+        local success, result = pcall(function()
+            setthreadidentity(2)
+            local _ = old_require(path)
+            setthreadidentity(8)
+            return _
+        end)
+        
+        if not success then
+            warn("Require error: " .. tostring(result))
+            return nil
+        end
+        
+        return result
+    end
+end)
+
+if not success then
+    handleError(err, "require setup")
+end
+
+-- Set up GlobalData and XFunctions to prevent errors
+if not shared.GlobalData then
+    shared.GlobalData = {}
+end
+
+-- Create a dummy XFunctions object with SetGlobalData method
+if not shared.XFunctions then
+    shared.XFunctions = {
+        SetGlobalData = function(self, key, value)
+            if not shared.GlobalData then shared.GlobalData = {} end
+            shared.GlobalData[key] = value
+            return value
+        end,
+        GetGlobalData = function(self, key)
+            if not shared.GlobalData then return nil end
+            return shared.GlobalData[key]
+        end
+    }
+end
+
+-- Add global functions to handle XFunctions calls
+getgenv().SetGlobalData = function(key, value)
+    if not shared.GlobalData then shared.GlobalData = {} end
+    shared.GlobalData[key] = value
+    return value
+end
+
+getgenv().GetGlobalData = function(key)
+    if not shared.GlobalData then return nil end
+    return shared.GlobalData[key]
+end
+
+-- Define file functions with error handling
 local isfile = isfile or function(file)
     local suc, res = pcall(function() return readfile(file) end)
     return suc and res ~= nil and res ~= ''
@@ -18,82 +77,67 @@ end
 local function downloadFile(path, func)
     if not isfile(path) then
         local suc, res = pcall(function()
-            return game:HttpGet('https://raw.githubusercontent.com/R12sa/TRIPLESREALVAPE/' .. readfile('newvape/profiles/commit.txt') .. '/' .. select(1, path:gsub('newvape/', '')), true)
+            return game:HttpGet('https://raw.githubusercontent.com/R12sa/TRIPLESREALVAPE/main/' .. select(1, path:gsub('newvape/', '')), true)
         end)
+        
         if not suc or res == '404: Not Found' then
-            warn("Failed to download file: " .. tostring(res))
+            warn("Failed to download file: " .. path .. " - " .. tostring(res))
             return nil
         end
+        
         if path:find('.lua') then
             res = '--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.\n' .. res
         end
+        
         pcall(function() writefile(path, res) end)
     end
-    return (func or readfile)(path)
-end
-
-local function wipeFolder(path)
-    if not isfolder(path) then return end
-    for _, file in pairs(listfiles(path)) do
-        if file:find('loader') then continue end
-        if isfile(file) and select(1, readfile(file):find('--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.')) == 1 then
-            delfile(file)
-        end
-    end
-end
-
-for _, folder in pairs({'newvape', 'newvape/games', 'newvape/profiles', 'newvape/assets', 'newvape/libraries', 'newvape/guis'}) do
-    if not isfolder(folder) then
-        pcall(function() makefolder(folder) end)
-    end
-end
-
-if not shared.VapeDeveloper then
-    local retries = 3
-    local subbed
     
-    while retries > 0 do
-        local success, response = pcall(function()
-            return game:HttpGet('https://github.com/R12sa/TRIPLESREALVAPE')
-        end)
-        
-        if success and response then
-            subbed = response
-            break
-        end
-        
-        retries = retries - 1
-        wait(1)
-    end
-    
-    if subbed then
-        local commit = subbed:find('currentOid')
-        commit = commit and subbed:sub(commit + 13, commit + 52) or nil
-        commit = commit and #commit == 40 and commit or 'main'
-        
-        if commit == 'main' or (isfile('newvape/profiles/commit.txt') and readfile('newvape/profiles/commit.txt') or '') ~= commit then
-            wipeFolder('newvape')
-            wipeFolder('newvape/games')
-            wipeFolder('newvape/guis')
-            wipeFolder('newvape/libraries')
-        end
-        
-        pcall(function() writefile('newvape/profiles/commit.txt', commit) end)
-    end
+    local content
+    pcall(function() content = (func or readfile)(path) end)
+    return content
 end
 
--- Load script safely
-local success, err = pcall(function()
-    loadstring(downloadFile('newvape/main.lua'), 'main')()
+-- Create folders
+pcall(function()
+    for _, folder in pairs({'newvape', 'newvape/games', 'newvape/profiles', 'newvape/assets', 'newvape/libraries', 'newvape/guis'}) do
+        if not isfolder(folder) then
+            pcall(function() makefolder(folder) end)
+        end
+    end
 end)
 
+-- Write commit file if it doesn't exist
+if not isfile('newvape/profiles/commit.txt') then
+    pcall(function() writefile('newvape/profiles/commit.txt', 'main') end)
+end
+
+-- Modify the environment to include XFunctions
+local env = getfenv(0)
+env.XFunctions = shared.XFunctions
+
+-- Download and execute main script
+local mainContent = downloadFile('newvape/main.lua')
+
+if not mainContent then
+    handleError("Failed to download main.lua", "download")
+    return
+end
+
+-- Execute main script with error handling and custom environment
+local mainFunc, loadErr = loadstring(mainContent, 'main')
+if not mainFunc then
+    handleError(loadErr, "loading")
+    return
+end
+
+-- Set the environment for the main function
+setfenv(mainFunc, env)
+
+-- Execute the main function
+local success, result = pcall(mainFunc)
+
 if not success then
-    warn("Failed to load script: " .. tostring(err))
-    game.StarterGui:SetCore("SendNotification", {
-        Title = "Error",
-        Text = "Failed to load script: " .. tostring(err),
-        Duration = 5
-    })
+    handleError(result, "execution")
 else
     game.StarterGui:SetCore("SendNotification", {
         Title = "Success",
