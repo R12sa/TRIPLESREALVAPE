@@ -32,38 +32,6 @@ if not success then
     handleError(err, "require setup")
 end
 
--- Set up GlobalData and XFunctions to prevent errors
-if not shared.GlobalData then
-    shared.GlobalData = {}
-end
-
--- Create a dummy XFunctions object with SetGlobalData method
-if not shared.XFunctions then
-    shared.XFunctions = {
-        SetGlobalData = function(self, key, value)
-            if not shared.GlobalData then shared.GlobalData = {} end
-            shared.GlobalData[key] = value
-            return value
-        end,
-        GetGlobalData = function(self, key)
-            if not shared.GlobalData then return nil end
-            return shared.GlobalData[key]
-        end
-    }
-end
-
--- Add global functions to handle XFunctions calls
-getgenv().SetGlobalData = function(key, value)
-    if not shared.GlobalData then shared.GlobalData = {} end
-    shared.GlobalData[key] = value
-    return value
-end
-
-getgenv().GetGlobalData = function(key)
-    if not shared.GlobalData then return nil end
-    return shared.GlobalData[key]
-end
-
 -- Define file functions with error handling
 local isfile = isfile or function(file)
     local suc, res = pcall(function() return readfile(file) end)
@@ -111,30 +79,62 @@ if not isfile('newvape/profiles/commit.txt') then
     pcall(function() writefile('newvape/profiles/commit.txt', 'main') end)
 end
 
--- Modify the environment to include XFunctions
-local env = getfenv(0)
-env.XFunctions = shared.XFunctions
+-- Create a custom version of the main script with XFunctions fix
+local function createCustomMainScript()
+    -- First download XFunctions.lua
+    local xfunctionsContent = game:HttpGet('https://raw.githubusercontent.com/R12sa/TRIPLESREALVAPE/main/libraries/XFunctions.lua', true)
+    
+    if not xfunctionsContent then
+        handleError("Failed to download XFunctions.lua", "download")
+        return nil
+    end
+    
+    -- Write XFunctions.lua to file
+    pcall(function() 
+        writefile('newvape/libraries/XFunctions.lua', '--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.\n' .. xfunctionsContent) 
+    end)
+    
+    -- Download main.lua
+    local mainContent = game:HttpGet('https://raw.githubusercontent.com/R12sa/TRIPLESREALVAPE/main/main.lua', true)
+    
+    if not mainContent then
+        handleError("Failed to download main.lua", "download")
+        return nil
+    end
+    
+    -- Write main.lua to file
+    pcall(function() 
+        writefile('newvape/main.lua', '--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.\n' .. mainContent) 
+    end)
+    
+    -- Create a custom script that loads XFunctions first
+    local customScript = [[
+        --This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.
+        repeat task.wait() until game:IsLoaded()
+        
+        -- Load XFunctions first
+        local XFunctions = loadstring(readfile('newvape/libraries/XFunctions.lua'), 'XFunctions')()
+        shared.XFunctions = XFunctions
+        
+        -- Now load the main script
+        loadstring(readfile('newvape/main.lua'), 'main')()
+    ]]
+    
+    return customScript
+end
 
--- Download and execute main script
-local mainContent = downloadFile('newvape/main.lua')
+-- Create and execute the custom script
+local customScript = createCustomMainScript()
 
-if not mainContent then
-    handleError("Failed to download main.lua", "download")
+if not customScript then
+    handleError("Failed to create custom script", "preparation")
     return
 end
 
--- Execute main script with error handling and custom environment
-local mainFunc, loadErr = loadstring(mainContent, 'main')
-if not mainFunc then
-    handleError(loadErr, "loading")
-    return
-end
-
--- Set the environment for the main function
-setfenv(mainFunc, env)
-
--- Execute the main function
-local success, result = pcall(mainFunc)
+-- Execute the custom script
+local success, result = pcall(function()
+    return loadstring(customScript, 'custom_main')()
+end)
 
 if not success then
     handleError(result, "execution")
