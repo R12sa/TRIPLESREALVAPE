@@ -6,6 +6,22 @@ getgenv().require = function(path)
     return _
 end
 
+-- Initialize GlobalData and SetGlobalData function
+if not shared.GlobalData then
+    shared.GlobalData = {}
+end
+
+-- Define SetGlobalData and GetGlobalData functions globally
+getgenv().SetGlobalData = function(key, value)
+    if not shared.GlobalData then shared.GlobalData = {} end
+    shared.GlobalData[key] = value
+end
+
+getgenv().GetGlobalData = function(key)
+    if not shared.GlobalData then return nil end
+    return shared.GlobalData[key]
+end
+
 -- Check if file-related functions exist and wrap them safely
 local isfile = isfile or function(file)
     local suc, res = pcall(function() return readfile(file) end)
@@ -83,9 +99,39 @@ if not shared.VapeDeveloper then
     end
 end
 
+-- Create a custom environment with XFunctions methods
+local customEnv = getfenv(0)
+customEnv.SetGlobalData = SetGlobalData
+customEnv.GetGlobalData = GetGlobalData
+
+-- Add XFunctions methods to handle the error
+if not shared.XFunctions then
+    shared.XFunctions = {
+        SetGlobalData = function(self, key, value)
+            SetGlobalData(key, value)
+        end,
+        GetGlobalData = function(self, key)
+            return GetGlobalData(key)
+        end
+    }
+end
+
 -- Load script safely
+local mainContent = downloadFile('newvape/main.lua')
+if not mainContent then
+    warn("Failed to download main.lua")
+    game.StarterGui:SetCore("SendNotification", {
+        Title = "Error",
+        Text = "Failed to download main script",
+        Duration = 5
+    })
+    return
+end
+
 local success, err = pcall(function()
-    loadstring(downloadFile('newvape/main.lua'), 'main')()
+    local mainFunc = loadstring(mainContent, 'main')
+    setfenv(mainFunc, customEnv)
+    mainFunc()
 end)
 
 if not success then
