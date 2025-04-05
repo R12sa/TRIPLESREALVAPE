@@ -6,7 +6,6 @@ getgenv().require = function(path)
     return _
 end
 
--- Check if file-related functions exist and wrap them safely
 local isfile = isfile or function(file)
     local suc, res = pcall(function() return readfile(file) end)
     return suc and res ~= nil and res ~= ''
