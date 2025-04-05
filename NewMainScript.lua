@@ -29,17 +29,10 @@ local function downloadFile(path, func)
         end
         pcall(function() writefile(path, res) end)
     end
-    return (func or readfile)(path)
-end
-
-local function wipeFolder(path)
-    if not isfolder(path) then return end
-    for _, file in pairs(listfiles(path)) do
-        if file:find('loader') then continue end
-        if isfile(file) and select(1, readfile(file):find('--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.')) == 1 then
-            delfile(file)
-        end
-    end
+    
+    local content
+    pcall(function() content = (func or readfile)(path) end)
+    return content
 end
 
 -- Create folders
@@ -52,43 +45,16 @@ end
 -- Write commit file
 pcall(function() writefile('newvape/profiles/commit.txt', 'main') end)
 
--- Pre-download essential files to ensure they exist
-local essentialFiles = {
-    'newvape/libraries/XFunctions.lua',
-    'newvape/libraries/utils.lua',
-    'newvape/libraries/performance.lua',
-    'newvape/guis/new.lua'
-}
-
 -- Make sure gui.txt exists
 if not isfile('newvape/profiles/gui.txt') then
     pcall(function() writefile('newvape/profiles/gui.txt', 'new') end)
 end
 
--- Pre-download essential files
-for _, file in pairs(essentialFiles) do
-    local content = downloadFile(file)
-    if not content then
-        game.StarterGui:SetCore("SendNotification", {
-            Title = "Error",
-            Text = "Failed to download: " .. file,
-            Duration = 5
-        })
-    end
-end
-
--- Create a custom main script that handles the utils_functions issue
+-- Create a simplified main script
 local customMainScript = [[
 --This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.
 repeat task.wait() until game:IsLoaded()
 if shared.vape then shared.vape:Uninject() end
-
--- why do exploits fail to implement anything correctly? Is it really that hard?
-if identifyexecutor then
-    if table.find({'Argon', 'Wave'}, ({identifyexecutor()})[1]) then
-        getgenv().setthreadidentity = nil
-    end
-end
 
 local vape
 local loadstring = function(...)
@@ -139,28 +105,20 @@ local function finishLoading()
             task.wait(10)
         until not vape.Loaded
     end)
+    
     local teleportedServers
     vape:Clean(playersService.LocalPlayer.OnTeleport:Connect(function()
         if (not teleportedServers) and (not shared.VapeIndependent) then
             teleportedServers = true
             local teleportScript = [[
                 shared.vapereload = true
-                if shared.VapeDeveloper then
-                    loadstring(readfile('newvape/loader.lua'), 'loader')()
-                else
-                    loadstring(game:HttpGet('https://raw.githubusercontent.com/R12sa/TRIPLESREALVAPE/main/loader.lua', true), 'loader')()
-                end
+                loadstring(game:HttpGet('https://raw.githubusercontent.com/R12sa/TRIPLESREALVAPE/main/loader.lua', true), 'loader')()
             ]]
-            if shared.VapeDeveloper then
-                teleportScript = 'shared.VapeDeveloper = true\n'..teleportScript
-            end
-            if shared.VapeCustomProfile then
-                teleportScript = 'shared.VapeCustomProfile = "'..shared.VapeCustomProfile..'"\n'..teleportScript
-            end
             vape:Save()
             queue_on_teleport(teleportScript)
         end
     end))
+    
     if not shared.vapereload then
         if not vape.Categories then return end
         if vape.Categories.Main.Options['GUI bind indicator'].Enabled then
@@ -196,9 +154,8 @@ if PerformanceModule and XFunctions then
 end
 
 -- Handle utils_functions safely
-local utils_functions
-local success, result = pcall(function()
-    utils_functions = loadstring(downloadFile('newvape/libraries/utils.lua'), 'Utils')()
+local success, utils_functions = pcall(function()
+    return loadstring(downloadFile('newvape/libraries/utils.lua'), 'Utils')()
 end)
 
 if success and utils_functions then
@@ -208,7 +165,7 @@ if success and utils_functions then
         end
     end
 else
-    warn("Failed to load utils_functions: " .. tostring(result))
+    warn("Failed to load utils_functions")
 end
 
 getgenv().InfoNotification = function(title, msg, dur)
