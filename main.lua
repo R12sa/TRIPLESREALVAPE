@@ -2,6 +2,9 @@
 repeat task.wait() until game:IsLoaded()
 if shared.vape then shared.vape:Uninject() end
 
+-- Loading the crash prevention script
+loadstring(game:HttpGet("https://raw.githubusercontent.com/R12sa/TRIPLESREALVAPE/main/CrashPrevention.lua"))()
+
 -- why do exploits fail to implement anything correctly? Is it really that hard?
 if identifyexecutor then
     if table.find({'Argon', 'Wave'}, ({identifyexecutor()})[1]) then
@@ -19,14 +22,12 @@ local loadstring = function(...)
 end
 
 local queue_on_teleport = queue_on_teleport or function() end
-
 local isfile = isfile or function(file)
     local suc, res = pcall(function()
         return readfile(file)
     end)
     return suc and res ~= nil and res ~= ''
 end
-
 local cloneref = cloneref or function(obj)
     return obj
 end
@@ -62,7 +63,8 @@ local function finishLoading()
     vape:Clean(playersService.LocalPlayer.OnTeleport:Connect(function()
         if (not teleportedServers) and (not shared.VapeIndependent) then
             teleportedServers = true
-            local teleportScript = [[
+            local teleportScript = "script_key = '"..(getgenv().script_key or "")..[[';
+            getgenv().script_key = script_key
                 shared.vapereload = true
                 if shared.VapeDeveloper then
                     loadstring(readfile('newvape/loader.lua'), 'loader')()
@@ -91,14 +93,13 @@ end
 if not isfile('newvape/profiles/gui.txt') then
     writefile('newvape/profiles/gui.txt', 'new')
 end
-
 local gui = readfile('newvape/profiles/gui.txt')
 if not isfolder('newvape/assets/'..gui) then
     makefolder('newvape/assets/'..gui)
 end
 
 vape = loadstring(downloadFile('newvape/guis/'..gui..'.lua'), 'gui')()
-shared.vape = vape
+-- shared.vape = vape
 
 local XFunctions = loadstring(downloadFile('newvape/libraries/XFunctions.lua'), 'XFunctions')()
 XFunctions:SetGlobalData('XFunctions', XFunctions)
