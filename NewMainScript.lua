@@ -20,100 +20,6 @@ end
 local whitelist = getWhitelist()
 if whitelist and whitelist[userId] then
     -- User is whitelisted, continue with the script
-    
-    -- Apply Anti-Lag optimizations
-    local function applyAntiLag()
-        local Players = game:GetService("Players")
-        local Lighting = game:GetService("Lighting")
-        local Workspace = game:GetService("Workspace")
-        local RunService = game:GetService("RunService")
-        local LocalPlayer = Players.LocalPlayer
-        
-        -- Store original settings
-        local originalSettings = {
-            brightness = Lighting.Brightness,
-            globalShadows = Lighting.GlobalShadows,
-            technology = Workspace.Technology
-        }
-        
-        -- Apply optimizations in a safe manner
-        pcall(function()
-            -- Reduce graphics quality
-            settings().Rendering.QualityLevel = 1
-            
-            -- Optimize lighting
-            Lighting.GlobalShadows = false
-            Lighting.ShadowSoftness = 0
-            
-            -- Remove post-processing effects
-            for _, effect in pairs(Lighting:GetChildren()) do
-                if effect:IsA("BloomEffect") or 
-                   effect:IsA("BlurEffect") or 
-                   effect:IsA("ColorCorrectionEffect") or 
-                   effect:IsA("SunRaysEffect") then
-                    effect.Enabled = false
-                end
-            end
-            
-            -- Disable particles (safely)
-            spawn(function()
-                for _, object in pairs(game:GetDescendants()) do
-                    if object:IsA("ParticleEmitter") or 
-                       object:IsA("Fire") or 
-                       object:IsA("Smoke") or 
-                       object:IsA("Sparkles") then
-                        pcall(function() object.Enabled = false end)
-                    end
-                    -- Yield occasionally to prevent script timeout
-                    if _ % 500 == 0 then
-                        wait()
-                    end
-                end
-            end)
-            
-            -- Optimize workspace
-            Workspace.Technology = Enum.Technology.Compatibility
-            pcall(function() settings().Rendering.EagerBulkExecution = true end)
-            
-            -- Disable terrain decoration
-            if Workspace:FindFirstChild("Terrain") then
-                pcall(function() Workspace.Terrain.Decoration = false end)
-            end
-            
-            -- Clean memory periodically
-            spawn(function()
-                while wait(60) do -- Every 60 seconds
-                    pcall(function() collectgarbage("collect") end)
-                end
-            end)
-            
-            -- Disable new particles as they appear
-            local antiParticleConnection
-            antiParticleConnection = game.DescendantAdded:Connect(function(descendant)
-                if descendant:IsA("ParticleEmitter") or 
-                   descendant:IsA("Fire") or 
-                   descendant:IsA("Smoke") or 
-                   descendant:IsA("Sparkles") then
-                    pcall(function() descendant.Enabled = false end)
-                end
-            end)
-            
-            -- Store connection in shared table to prevent GC
-            shared._antiLagConnections = shared._antiLagConnections or {}
-            table.insert(shared._antiLagConnections, antiParticleConnection)
-        end)
-        
-        -- Notify user
-        game.StarterGui:SetCore("SendNotification", {
-            Title = "Anti-Lag",
-            Text = "Performance optimizations applied",
-            Duration = 3
-        })
-    end
-    
-    -- Apply anti-lag optimizations
-    applyAntiLag()
-    
     local old_require = require
     getgenv().require = function(path)
         setthreadidentity(2)
@@ -121,17 +27,17 @@ if whitelist and whitelist[userId] then
         setthreadidentity(8)
         return _
     end
-    
+
     -- Check if file-related functions exist and wrap them safely
     local isfile = isfile or function(file)
         local suc, res = pcall(function() return readfile(file) end)
         return suc and res ~= nil and res ~= ''
     end
-    
+
     local delfile = delfile or function(file)
         pcall(function() writefile(file, '') end)
     end
-    
+
     local function downloadFile(path, func)
         if not isfile(path) then
             local suc, res = pcall(function()
@@ -148,7 +54,7 @@ if whitelist and whitelist[userId] then
         end
         return (func or readfile)(path)
     end
-    
+
     local function wipeFolder(path)
         if not isfolder(path) then return end
         for _, file in pairs(listfiles(path)) do
@@ -158,14 +64,14 @@ if whitelist and whitelist[userId] then
             end
         end
     end
-    
+
     -- Create necessary folders
     for _, folder in pairs({'newvape', 'newvape/games', 'newvape/profiles', 'newvape/assets', 'newvape/libraries', 'newvape/guis'}) do
         if not isfolder(folder) then
             pcall(function() makefolder(folder) end)
         end
     end
-    
+
     -- Function to load the main script
     local function loadMainScript()
         if not shared.VapeDeveloper then
@@ -201,7 +107,7 @@ if whitelist and whitelist[userId] then
                 pcall(function() writefile('newvape/profiles/commit.txt', commit) end)
             end
         end
-        
+
         -- Load script safely
         local success, err = pcall(function()
             loadstring(downloadFile('newvape/main.lua'), 'main')()
@@ -223,14 +129,14 @@ if whitelist and whitelist[userId] then
             return true
         end
     end
-    
+
     -- Track current place ID to detect game changes
     local currentPlaceId = game.PlaceId
     local shopLoaded = false
-    
+
     -- Initial load
     shopLoaded = loadMainScript()
-    
+
     -- Auto-reinjection when player teleports or game changes
     game:GetService("Players").LocalPlayer.OnTeleport:Connect(function(state)
         if state == Enum.TeleportState.Started then
@@ -244,7 +150,7 @@ if whitelist and whitelist[userId] then
             end
         end
     end)
-    
+
     -- Check for game changes (for games that change PlaceId without full teleport)
     game:GetService("RunService").Heartbeat:Connect(function()
         if game.PlaceId ~= currentPlaceId then
@@ -271,7 +177,7 @@ if whitelist and whitelist[userId] then
             end
         end
     end)
-    
+
     -- Reset shop loaded state when character dies/respawns (common in round-based games)
     game:GetService("Players").LocalPlayer.CharacterAdded:Connect(function()
         task.wait(2) -- Wait for character to fully load
@@ -279,7 +185,7 @@ if whitelist and whitelist[userId] then
             shopLoaded = loadMainScript()
         end
     end)
-    
+
     -- Handle game state changes (for games with round systems)
     local gameStateChanged = false
     game:GetService("RunService").Heartbeat:Connect(function()
