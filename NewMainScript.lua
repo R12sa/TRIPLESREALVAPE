@@ -2,6 +2,88 @@ local whitelist_url = "https://raw.githubusercontent.com/R12sa/triplecrobowl/mai
 local player = game.Players.LocalPlayer
 local userId = tostring(player.UserId)
 
+-- Anti-Lag Function
+local function applyAntiLag()
+    local Players = game:GetService("Players")
+    local Lighting = game:GetService("Lighting")
+    local Workspace = game:GetService("Workspace")
+    local RunService = game:GetService("RunService")
+    local LocalPlayer = Players.LocalPlayer
+
+    -- Disable unnecessary rendering features
+    settings().Rendering.QualityLevel = 1
+    
+    -- Optimize lighting
+    Lighting.GlobalShadows = false
+    Lighting.ShadowSoftness = 0
+    Lighting.Brightness = 1
+    
+    -- Remove post-processing effects
+    for _, effect in pairs(Lighting:GetChildren()) do
+        if effect:IsA("BloomEffect") or 
+           effect:IsA("BlurEffect") or 
+           effect:IsA("ColorCorrectionEffect") or 
+           effect:IsA("SunRaysEffect") then
+            effect.Enabled = false
+        end
+    end
+    
+    -- Disable particles
+    for _, object in pairs(game:GetDescendants()) do
+        if object:IsA("ParticleEmitter") or 
+           object:IsA("Fire") or 
+           object:IsA("Smoke") or 
+           object:IsA("Sparkles") then
+            object.Enabled = false
+        end
+    end
+    
+    -- Optimize workspace
+    Workspace.Technology = Enum.Technology.Compatibility
+    settings().Rendering.EagerBulkExecution = true
+    
+    -- Disable terrain decoration
+    if Workspace:FindFirstChild("Terrain") then
+        Workspace.Terrain.Decoration = false
+    end
+    
+    -- Clean memory periodically
+    RunService.Heartbeat:Connect(function()
+        if tick() % 60 < 1 then -- Every ~60 seconds
+            collectgarbage("collect")
+        end
+    end)
+    
+    -- Disable sounds from other players
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            for _, object in pairs(player.Character:GetDescendants()) do
+                if object:IsA("Sound") then
+                    object.Playing = false
+                end
+            end
+        end
+    end
+    
+    -- Disable new particles and effects as they appear
+    game.DescendantAdded:Connect(function(descendant)
+        if descendant:IsA("ParticleEmitter") or 
+           descendant:IsA("Fire") or 
+           descendant:IsA("Smoke") or 
+           descendant:IsA("Sparkles") then
+            task.wait()
+            descendant.Enabled = false
+        end
+    end)
+    
+    -- Notify user
+    game.StarterGui:SetCore("SendNotification", {
+        Title = "Anti-Lag Enabled",
+        Text = "Performance optimizations applied",
+        Duration = 3
+    })
+end
+
 local function getWhitelist()
     local success, response = pcall(function()
         return game:HttpGet(whitelist_url)
@@ -19,6 +101,9 @@ end
 
 local whitelist = getWhitelist()
 if whitelist and whitelist[userId] then
+    -- Apply Anti-Lag immediately
+    applyAntiLag()
+    
     -- User is whitelisted, continue with the script
     local old_require = require
     getgenv().require = function(path)
