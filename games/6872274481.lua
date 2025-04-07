@@ -1,3 +1,4 @@
+--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.
 local run = function(func)
 	func()
 end
@@ -5477,76 +5478,222 @@ run(function()
 end)
 	
 run(function()
-	local AutoSuffocate
-	local Range
-	local LimitItem
-	
-	local function fixPosition(pos)
-		return bedwars.BlockController:getBlockPosition(pos) * 3
-	end
-	
-	AutoSuffocate = vape.Categories.World:CreateModule({
-		Name = 'AutoSuffocate',
-		Function = function(callback)
-			if callback then
-				repeat
-					local item = store.hand.toolType == 'block' and store.hand.tool.Name or not LimitItem.Enabled and getWool()
-	
-					if item then
-						local plrs = entitylib.AllPosition({
-							Part = 'RootPart',
-							Range = Range.Value,
-							Players = true
-						})
-	
-						for _, ent in plrs do
-							local needPlaced = {}
-	
-							for _, side in Enum.NormalId:GetEnumItems() do
-								side = Vector3.fromNormalId(side)
-								if side.Y ~= 0 then continue end
-	
-								side = fixPosition(ent.RootPart.Position + side * 2)
-								if not getPlacedBlock(side) then
-									table.insert(needPlaced, side)
-								end
-							end
-	
-							if #needPlaced < 3 then
-								table.insert(needPlaced, fixPosition(ent.Head.Position))
-								table.insert(needPlaced, fixPosition(ent.RootPart.Position - Vector3.new(0, 1, 0)))
-	
-								for _, pos in needPlaced do
-									if not getPlacedBlock(pos) then
-										task.spawn(bedwars.placeBlock, pos, item)
-										break
-									end
-								end
-							end
-						end
-					end
-	
-					task.wait(0.09)
-				until not AutoSuffocate.Enabled
-			end
-		end,
-		Tooltip = 'Places blocks on nearby confined entities'
-	})
-	Range = AutoSuffocate:CreateSlider({
-		Name = 'Range',
-		Min = 1,
-		Max = 20,
-		Default = 20,
-		Suffix = function(val)
-			return val == 1 and 'stud' or 'studs'
-		end
-	})
-	LimitItem = AutoSuffocate:CreateToggle({
-		Name = 'Limit to Items',
-		Default = true
-	})
+    local AutoSuffocate
+    local Range
+    local LimitItem
+    local RequiredBlocks
+    local TargetHead
+ 
+    local function fixPosition(pos)
+        return bedwars.BlockController:getBlockPosition(pos) * 3
+    end
+ 
+    -- Check if a position has a block
+    local function hasBlock(pos)
+        return getPlacedBlock(pos) ~= nil
+    end
+ 
+    -- Get all blocks around a player
+    local function getBlocksAroundPlayer(entity)
+        local rootPos = entity.RootPart.Position
+        local surroundingBlocks = {}
+        local openPositions = {}
+ 
+        -- Check all horizontal sides
+        for _, side in Enum.NormalId:GetEnumItems() do
+            local normal = Vector3.fromNormalId(side)
+            if normal.Y ~= 0 then continue end
+ 
+            local blockPos = fixPosition(rootPos + normal * 2)
+            if hasBlock(blockPos) then
+                table.insert(surroundingBlocks, {pos = blockPos, normal = normal})
+            else
+                table.insert(openPositions, {pos = blockPos, normal = normal})
+            end
+        end
+ 
+        -- Check head position
+        local headPos = fixPosition(entity.Head.Position)
+        local headOpen = not hasBlock(headPos)
+ 
+        -- Check floor position
+        local floorPos = fixPosition(rootPos - Vector3.new(0, 1, 0))
+        local floorOpen = not hasBlock(floorPos)
+ 
+        return {
+            blockedSides = surroundingBlocks,
+            openSides = openPositions,
+            headPos = headPos,
+            headOpen = headOpen,
+            floorPos = floorPos,
+            floorOpen = floorOpen
+        }
+    end
+ 
+    -- Find the optimal trap configuration
+    local function findOptimalTrap(entity)
+        local data = getBlocksAroundPlayer(entity)
+        local placements = {}
+ 
+        -- If we already have enough blocks around the player
+        if #data.blockedSides >= RequiredBlocks.Value then
+            -- First, try to place blocks on open sides to complete the trap
+            for _, open in ipairs(data.openSides) do
+                table.insert(placements, open.pos)
+            end
+ 
+            -- Then, if head targeting is enabled, try to place a block at head level
+            if TargetHead.Enabled and data.headOpen then
+                table.insert(placements, 1, data.headPos) -- Priority on head
+            end
+ 
+            -- Finally, try to place a block on the floor if needed
+            if data.floorOpen then
+                table.insert(placements, data.floorPos)
+            end
+ 
+            return placements
+        end
+ 
+        -- Check if player is in a corner (two adjacent blocks)
+        if #data.blockedSides >= 2 then
+            -- Check if any two blocks are adjacent (forming a corner)
+            local isCorner = false
+            for i = 1, #data.blockedSides do
+                for j = i+1, #data.blockedSides do
+                    local n1 = data.blockedSides[i].normal
+                    local n2 = data.blockedSides[j].normal
+                    -- If dot product is 0, they're perpendicular (corner)
+                    if n1:Dot(n2) == 0 then
+                        isCorner = true
+                        break
+                    end
+                end
+                if isCorner then break end
+            end
+ 
+            if isCorner then
+                -- If it's a corner, we can efficiently trap
+                for _, open in ipairs(data.openSides) do
+                    table.insert(placements, open.pos)
+                end
+ 
+                if TargetHead.Enabled and data.headOpen then
+                    table.insert(placements, 1, data.headPos) -- Priority on head
+                end
+ 
+                if data.floorOpen then
+                    table.insert(placements, data.floorPos)
+                end
+ 
+                return placements
+            end
+        end
+ 
+        -- If player is against a single wall and we want to trap with just 1 required block
+        if #data.blockedSides >= RequiredBlocks.Value then
+            -- Find the opposite side of the existing block
+            for i, blocked in ipairs(data.blockedSides) do
+                local oppositeNormal = blocked.normal * -1
+                for j, open in ipairs(data.openSides) do
+                    -- If we find the opposite side open, prioritize placing there
+                    if open.normal == oppositeNormal then
+                        table.insert(placements, open.pos)
+ 
+                        -- Then add head if enabled
+                        if TargetHead.Enabled and data.headOpen then
+                            table.insert(placements, data.headPos)
+                        end
+ 
+                        return placements
+                    end
+                end
+            end
+ 
+            -- If no direct opposite, just return open sides
+            for _, open in ipairs(data.openSides) do
+                table.insert(placements, open.pos)
+            end
+ 
+            if TargetHead.Enabled and data.headOpen then
+                table.insert(placements, 1, data.headPos)
+            end
+ 
+            return placements
+        end
+ 
+        return {} -- Not enough blocks to efficiently trap
+    end
+ 
+    AutoSuffocate = vape.Categories.World:CreateModule({
+        Name = 'AutoSuffocate',
+        Function = function(callback)
+            if callback then
+                task.spawn(function()
+                    while AutoSuffocate.Enabled do
+                        local item = store.hand.toolType == 'block' and store.hand.tool.Name or not LimitItem.Enabled and getWool()
+ 
+                        if item then
+                            local plrs = entitylib.AllPosition({
+                                Part = 'RootPart',
+                                Range = Range.Value,
+                                Players = true,
+                                TeamCheck = true
+                            })
+ 
+                            local placedBlock = false
+                            for _, ent in pairs(plrs) do
+                                local placements = findOptimalTrap(ent)
+ 
+                                if #placements > 0 then
+                                    -- Place the highest priority block (first in the list)
+                                    task.spawn(bedwars.placeBlock, placements[1], item)
+                                    placedBlock = true
+                                    break
+                                end
+                            end
+ 
+                            task.wait(placedBlock and 0.08 or 0.2)
+                        else
+                            task.wait(0.2)
+                        end
+                    end
+                end)
+            end
+        end,
+        Tooltip = 'Intelligently suffocates players near walls and corners'
+    })
+ 
+    Range = AutoSuffocate:CreateSlider({
+        Name = 'Range',
+        Min = 1,
+        Max = 20,
+        Default = 20,
+        Suffix = function(val)
+            return val == 1 and 'stud' or 'studs'
+        end
+    })
+ 
+    LimitItem = AutoSuffocate:CreateToggle({
+        Name = 'Limit to Items',
+        Default = true
+    })
+ 
+    RequiredBlocks = AutoSuffocate:CreateSlider({
+        Name = 'Required Blocks',
+        Min = 1,
+        Max = 3,
+        Default = 1,
+        Tooltip = 'Minimum existing blocks needed before attempting to trap'
+    })
+ 
+    TargetHead = AutoSuffocate:CreateToggle({
+        Name = 'Target Head',
+        Default = true,
+        Tooltip = 'Prioritize placing blocks at head level for suffocation'
+    })
 end)
-	
+
 run(function()
 	local AutoTool
 	local old, event
@@ -5594,71 +5741,94 @@ run(function()
 end)
 	
 run(function()
-	local BedProtector
-	
-	local function getBedNear()
-		local localPosition = entitylib.isAlive and entitylib.character.RootPart.Position or Vector3.zero
-		for _, v in collectionService:GetTagged('bed') do
-			if (localPosition - v.Position).Magnitude < 20 and v:GetAttribute('Team'..(lplr:GetAttribute('Team') or -1)..'NoBreak') then
-				return v
-			end
-		end
-	end
-	
-	local function getBlocks()
-		local blocks = {}
-		for _, item in store.inventory.inventory.items do
-			local block = bedwars.ItemMeta[item.itemType].block
-			if block then
-				table.insert(blocks, {item.itemType, block.health})
-			end
-		end
-		table.sort(blocks, function(a, b) 
-			return a[2] > b[2]
-		end)
-		return blocks
-	end
-	
-	local function getPyramid(size, grid)
-		local positions = {}
-		for h = size, 0, -1 do
-			for w = h, 0, -1 do
-				table.insert(positions, Vector3.new(w, (size - h), ((h + 1) - w)) * grid)
-				table.insert(positions, Vector3.new(w * -1, (size - h), ((h + 1) - w)) * grid)
-				table.insert(positions, Vector3.new(w, (size - h), (h - w) * -1) * grid)
-				table.insert(positions, Vector3.new(w * -1, (size - h), (h - w) * -1) * grid)
-			end
-		end
-		return positions
-	end
-	
-	BedProtector = vape.Categories.World:CreateModule({
-		Name = 'BedProtector',
-		Function = function(callback)
-			if callback then
-				local bed = getBedNear()
-				bed = bed and bed.Position or nil
-				if bed then
-					for i, block in getBlocks() do
-						for _, pos in getPyramid(i, 3) do
-							if not BedProtector.Enabled then break end
-							if getPlacedBlock(bed + pos) then continue end
-							bedwars.placeBlock(bed + pos, block[1], false)
-						end
-					end
-					if BedProtector.Enabled then 
-						BedProtector:Toggle() 
-					end
-				else
-					notif('BedProtector', 'Unable to locate bed', 5)
-					BedProtector:Toggle()
-				end
-			end
-		end,
-		Tooltip = 'Automatically places strong blocks around the bed.'
-	})
+    local BedProtector
+    local currentLayer = 0
+ 
+    local function getBedNear()
+        local localPosition = entitylib.isAlive and entitylib.character.HumanoidRootPart.Position or Vector3.zero
+        for _, v in pairs(collectionService:GetTagged('bed')) do
+            if (localPosition - v.Position).Magnitude < 20 and v:GetAttribute('Team'..(lplr:GetAttribute('Team') or -1)..'NoBreak') then
+                return v
+            end
+        end
+    end
+ 
+    local function getCurrentBlock()
+        local item = store.inventory.inventory.hand
+        if item then
+            local block = bedwars.ItemMeta[item.itemType].block
+            if block then
+                return item.itemType
+            end
+        end
+        return nil
+    end
+ 
+    local function getPyramid(size, grid)
+        local positions = {}
+        for h = size, 0, -1 do
+            for w = h, 0, -1 do
+                table.insert(positions, Vector3.new(w, (size - h), ((h + 1) - w)) * grid)
+                table.insert(positions, Vector3.new(w * -1, (size - h), ((h + 1) - w)) * grid)
+                table.insert(positions, Vector3.new(w, (size - h), (h - w) * -1) * grid)
+                table.insert(positions, Vector3.new(w * -1, (size - h), (h - w) * -1) * grid)
+            end
+        end
+        return positions
+    end
+ 
+    local function findBrokenPositions(bed)
+        local broken = {}
+        for i = 0, currentLayer do
+            for _, pos in pairs(getPyramid(i, 3)) do
+                if not getPlacedBlock(bed.Position + pos) then
+                    table.insert(broken, pos)
+                end
+            end
+        end
+        return broken
+    end
+ 
+    BedProtector = vape.Categories.World:CreateModule({
+        Name = 'BedProtector',
+        Function = function(callback)
+            if callback then
+                local bed = getBedNear()
+                if bed then
+                    local blockType = getCurrentBlock()
+                    if blockType then
+                        local brokenPositions = findBrokenPositions(bed)
+                        if #brokenPositions > 0 then
+                            for _, pos in pairs(brokenPositions) do
+                                if not BedProtector.Enabled then break end
+                                bedwars.placeBlock(bed.Position + pos, blockType)
+                                task.wait(0.01)
+                            end
+                        else
+                            currentLayer = currentLayer + 1
+                            for _, pos in pairs(getPyramid(currentLayer, 3)) do
+                                if not BedProtector.Enabled then break end
+                                bedwars.placeBlock(bed.Position + pos, blockType)
+                                task.wait(0.01)
+                            end
+                        end
+                        if BedProtector.Enabled then 
+                            BedProtector:Toggle() 
+                        end
+                    else
+                        notif('BedProtector', 'Hold blocks in your hand', 5)
+                        BedProtector:Toggle()
+                    end
+                else
+                    notif('BedProtector', 'Get closer to your bed', 5)
+                    BedProtector:Toggle()
+                end
+            end
+        end,
+        Tooltip = 'Creates perfect bed protection layers'
+    })
 end)
-	
+
 run(function()
 	local ChestSteal
 	local Range
@@ -8589,4 +8759,1198 @@ run(function()
 		Name = 'Effects',
 		List = WinEffectName
 	})
+end)
+
+local Attacking = false
+ 
+run(function()
+    local FastKillaura, Targets, Sort, Range, UpdateRate, AngleSlider, MaxTargets
+    local Mouse, Swing, GUI, BoxColor, ParticleTexture, ParticleColor1, ParticleColor2
+    local ParticleSize, Face, Animation, AnimationMode, AnimationSpeed, AnimationTween
+    local Limit, LegitAura, Sync
+    local Particles, Boxes = {}, {}
+    local anims, AnimDelay, AnimTween, armC0 = vape.Libraries.auraanims, tick()
+    local AttackRemote = {FireServer = function() end}
+ 
+    task.spawn(function()
+        AttackRemote = bedwars.Client:Get(remotes.AttackEntity).instance
+    end)
+ 
+    local function calculateRange(range)
+        return math.clamp(range, 1, 20) * 1.5
+    end
+ 
+    local function performAttack(sword, meta, target, selfpos)
+        local delta = (target.RootPart.Position - selfpos)
+        local dir = CFrame.lookAt(selfpos, target.RootPart.Position).LookVector
+        local pos = selfpos + dir * math.max(delta.Magnitude - 2, 0)
+ 
+        local attackData = {
+            weapon = sword.tool,
+            chargedAttack = {
+                chargeRatio = 1
+            },
+            entityInstance = target.Character,
+            validate = {
+                raycast = {
+                    cameraPosition = {value = pos},
+                    cursorDirection = {value = dir}
+                },
+                targetPosition = {value = target.RootPart.Position},
+                selfPosition = {value = pos}
+            }
+        }
+ 
+        bedwars.SwordController.lastAttack = workspace:GetServerTimeNow()
+        store.attackReach = delta.Magnitude
+        store.attackReachUpdate = tick() + 1
+ 
+        for i = 1, 158 do
+            AttackRemote:FireServer(attackData)
+            task.wait(0.01)
+        end
+    end
+ 
+    local function getAttackData()
+        if Mouse.Enabled and not inputService:IsMouseButtonPressed(0) then 
+            return false 
+        end
+ 
+        if GUI.Enabled and bedwars.AppController:isLayerOpen(bedwars.UILayers.MAIN) then 
+            return false 
+        end
+ 
+        local sword = Limit.Enabled and store.hand or store.tools.sword
+        if not sword or not sword.tool then 
+            return false 
+        end
+ 
+        local meta = bedwars.ItemMeta[sword.tool.Name]
+        if Limit.Enabled and (store.hand.toolType ~= 'sword' or bedwars.DaoController.chargingMaid) then 
+            return false 
+        end
+ 
+        if LegitAura.Enabled and (tick() - bedwars.SwordController.lastSwing) > 0.1 then 
+            return false 
+        end
+ 
+        return sword, meta
+    end
+ 
+    local function playAttackAnimation(meta)
+        if not Swing.Enabled and AnimDelay <= tick() and not LegitAura.Enabled then
+            AnimDelay = tick() + (meta.sword.respectAttackSpeedForEffects and meta.sword.attackSpeed or (Sync.Enabled and 0.24 or 0.14))
+            bedwars.SwordController:playSwordEffect(meta, 0)
+ 
+            if meta.displayName:find(' Scythe') then
+                bedwars.ScytheController:playLocalAnimation()
+            end
+        end
+    end
+ 
+    local function getTargets(range)
+        return entitylib.AllPosition({
+            Range = calculateRange(range),
+            Wallcheck = Targets.Walls.Enabled or nil,
+            Part = 'RootPart',
+            Players = Targets.Players.Enabled,
+            NPCs = Targets.NPCs.Enabled,
+            Limit = MaxTargets.Value,
+            Sort = sortmethods[Sort.Value]
+        })
+    end
+ 
+    FastKillaura = vape.Categories.Blatant:CreateModule({
+        Name = 'FastKillaura',
+        Function = function(callback)
+            if callback then
+                if inputService.TouchEnabled then
+                    pcall(function()
+                        lplr.PlayerGui.MobileUI['2'].Visible = Limit.Enabled
+                    end)
+                end
+ 
+                if Animation.Enabled then
+                    local fake = {
+                        Controllers = {
+                            ViewmodelController = {
+                                isVisible = function()
+                                    return not Attacking
+                                end,
+                                playAnimation = function(...)
+                                    if not Attacking then
+                                        bedwars.ViewmodelController:playAnimation(select(2, ...))
+                                    end
+                                end
+                            }
+                        }
+                    }
+                    debug.setupvalue(bedwars.SwordController.playSwordEffect, 6, fake)
+                    debug.setupvalue(bedwars.ScytheController.playLocalAnimation, 3, fake)
+ 
+                    task.spawn(function()
+                        local started = false
+                        repeat
+                            if Attacking then
+                                if not armC0 then
+                                    armC0 = gameCamera.Viewmodel.RightHand.RightWrist.C0
+                                end
+ 
+                                local first = not started
+                                started = true
+ 
+                                if AnimationMode.Value == 'Random' then
+                                    anims.Random = {{CFrame = CFrame.Angles(math.rad(math.random(1, 360)), math.rad(math.random(1, 360)), math.rad(math.random(1, 360))), Time = 0.12}}
+                                end
+ 
+                                for _, v in anims[AnimationMode.Value] do
+                                    AnimTween = tweenService:Create(gameCamera.Viewmodel.RightHand.RightWrist, TweenInfo.new(first and (AnimationTween.Enabled and 0.001 or 0.1) or v.Time / AnimationSpeed.Value, Enum.EasingStyle.Linear), {
+                                        C0 = armC0 * v.CFrame
+                                    })
+                                    AnimTween:Play()
+                                    AnimTween.Completed:Wait()
+                                    first = false
+                                    if (not FastKillaura.Enabled) or (not Attacking) then break end
+                                end
+                            elseif started then
+                                started = false
+                                AnimTween = tweenService:Create(gameCamera.Viewmodel.RightHand.RightWrist, TweenInfo.new(AnimationTween.Enabled and 0.001 or 0.3, Enum.EasingStyle.Exponential), {
+                                    C0 = armC0
+                                })
+                                AnimTween:Play()
+                            end
+ 
+                            if not started then
+                                task.wait(0.01)
+                            end
+                        until (not FastKillaura.Enabled) or (not Animation.Enabled)
+                    end)
+                end
+ 
+                repeat
+                    local attacked, sword, meta = {}, getAttackData()
+                    Attacking = false
+                    store.KillauraTarget = nil
+ 
+                    if sword then
+                        local plrs = getTargets(Range.Value)
+                        if #plrs > 0 then
+                            switchItem(sword.tool, 0)
+                            local selfpos = entitylib.character.RootPart.Position
+                            local localfacing = entitylib.character.RootPart.CFrame.LookVector * Vector3.new(1, 0, 1)
+ 
+                            for _, v in plrs do
+                                local delta = (v.RootPart.Position - selfpos)
+                                if delta.Magnitude <= calculateRange(Range.Value) then
+                                    local angle = math.acos(localfacing:Dot((delta * Vector3.new(1, 0, 1)).Unit))
+                                    if angle <= (math.rad(AngleSlider.Value) / 2) then
+                                        table.insert(attacked, v)
+                                        targetinfo.Targets[v] = tick() + 1
+ 
+                                        if not Attacking then
+                                            Attacking = true
+                                            store.KillauraTarget = v
+                                            playAttackAnimation(meta)
+                                        end
+ 
+                                        performAttack(sword, meta, v, selfpos)
+                                    end
+                                end
+                            end
+                        end
+                    end
+ 
+                    for i, v in Boxes do
+                        v.Adornee = attacked[i] and attacked[i].RootPart or nil
+                        if v.Adornee then
+                            v.Color3 = Color3.fromHSV(BoxColor.Hue, BoxColor.Sat, BoxColor.Value)
+                            v.Transparency = 1 - BoxColor.Opacity
+                        end
+                    end
+ 
+                    for i, v in Particles do
+                        v.Position = attacked[i] and attacked[i].RootPart.Position or Vector3.new(9e9, 9e9, 9e9)
+                        v.Parent = attacked[i] and gameCamera or nil
+                    end
+ 
+                    if Face.Enabled and attacked[1] then
+                        local vec = attacked[1].RootPart.Position * Vector3.new(1, 0, 1)
+                        entitylib.character.RootPart.CFrame = CFrame.lookAt(entitylib.character.RootPart.Position, Vector3.new(vec.X, entitylib.character.RootPart.Position.Y, vec.Z))
+                    end
+ 
+                    task.wait(0.01)
+                until not FastKillaura.Enabled
+            else
+                store.KillauraTarget = nil
+                for _, v in Boxes do
+                    v.Adornee = nil
+                end
+                for _, v in Particles do
+                    v.Parent = nil
+                end
+                if inputService.TouchEnabled then
+                    pcall(function()
+                        lplr.PlayerGui.MobileUI['2'].Visible = true
+                    end)
+                end
+                debug.setupvalue(bedwars.SwordController.playSwordEffect, 6, bedwars.Knit)
+                debug.setupvalue(bedwars.ScytheController.playLocalAnimation, 3, bedwars.Knit)
+                Attacking = false
+                if armC0 then
+                    AnimTween = tweenService:Create(gameCamera.Viewmodel.RightHand.RightWrist, TweenInfo.new(AnimationTween.Enabled and 0.001 or 0.3, Enum.EasingStyle.Exponential), {
+                        C0 = armC0
+                    })
+                    AnimTween:Play()
+                end
+            end
+        end,
+        Tooltip = 'Attack players around you\nwithout aiming at them.'
+    })
+ 
+    Targets = FastKillaura:CreateTargets({
+        Players = true,
+        NPCs = true,
+        Walls = true
+    })
+ 
+    local methods = {'Damage', 'Distance'}
+    for i in sortmethods do
+        if not table.find(methods, i) then
+            table.insert(methods, i)
+        end
+    end
+ 
+    Range = FastKillaura:CreateSlider({
+        Name = 'Attack range',
+        Min = 1,
+        Max = 20,
+        Default = 18,
+        Suffix = function(val)
+            return val == 1 and 'stud' or 'studs'
+        end
+    })
+ 
+    AngleSlider = FastKillaura:CreateSlider({
+        Name = 'Max angle',
+        Min = 1,
+        Max = 360,
+        Default = 360
+    })
+ 
+    UpdateRate = FastKillaura:CreateSlider({
+        Name = 'Update rate',
+        Min = 1,
+        Max = 120,
+        Default = 60,
+        Suffix = 'hz'
+    })
+ 
+    MaxTargets = FastKillaura:CreateSlider({
+        Name = 'Max targets',
+        Min = 1,
+        Max = 5,
+        Default = 5
+    })
+ 
+    Sort = FastKillaura:CreateDropdown({
+        Name = 'Target Mode',
+        List = methods
+    })
+ 
+    Mouse = FastKillaura:CreateToggle({Name = 'Require mouse down'})
+    Swing = FastKillaura:CreateToggle({Name = 'No Swing'})
+    GUI = FastKillaura:CreateToggle({Name = 'GUI check'})
+ 
+    FastKillaura:CreateToggle({
+        Name = 'Show target',
+        Function = function(callback)
+            BoxColor.Object.Visible = callback
+            if callback then
+                for i = 1, 10 do
+                    local box = Instance.new('BoxHandleAdornment')
+                    box.Adornee = nil
+                    box.AlwaysOnTop = true
+                    box.Size = Vector3.new(3, 5, 3)
+                    box.CFrame = CFrame.new(0, -0.5, 0)
+                    box.ZIndex = 0
+                    box.Parent = vape.gui
+                    Boxes[i] = box
+                end
+            else
+                for _, v in Boxes do
+                    v:Destroy()
+                end
+                table.clear(Boxes)
+            end
+        end
+    })
+ 
+    BoxColor = FastKillaura:CreateColorSlider({
+        Name = 'Attack Color',
+        Darker = true,
+        DefaultOpacity = 0.5,
+        Visible = false
+    })
+ 
+    Face = FastKillaura:CreateToggle({Name = 'Face target'})
+ 
+    Animation = FastKillaura:CreateToggle({
+        Name = 'Custom Animation',
+        Function = function(callback)
+            AnimationMode.Object.Visible = callback
+            AnimationTween.Object.Visible = callback
+            AnimationSpeed.Object.Visible = callback
+            if FastKillaura.Enabled then
+                FastKillaura:Toggle()
+                FastKillaura:Toggle()
+            end
+        end
+    })
+ 
+    local animnames = {}
+    for i in anims do
+        table.insert(animnames, i)
+    end
+ 
+    AnimationMode = FastKillaura:CreateDropdown({
+        Name = 'Animation Mode',
+        List = animnames,
+        Darker = true,
+        Visible = false
+    })
+ 
+    AnimationSpeed = FastKillaura:CreateSlider({
+        Name = 'Animation Speed',
+        Min = 0,
+        Max = 2,
+        Default = 1,
+        Decimal = 10,
+        Darker = true,
+        Visible = false
+    })
+ 
+    AnimationTween = FastKillaura:CreateToggle({
+        Name = 'No Tween',
+        Darker = true,
+        Visible = false
+    })
+ 
+    Limit = FastKillaura:CreateToggle({
+        Name = 'Limit to items',
+        Function = function(callback)
+            if inputService.TouchEnabled and FastKillaura.Enabled then
+                pcall(function()
+                    lplr.PlayerGui.MobileUI['2'].Visible = callback
+                end)
+            end
+        end,
+        Tooltip = 'Only attacks when the sword is held'
+    })
+ 
+    LegitAura = FastKillaura:CreateToggle({
+        Name = 'Swing only',
+        Tooltip = 'Only attacks while swinging manually'
+    })
+ 
+    Sync = FastKillaura:CreateToggle({
+        Name = 'Synced Animation',
+        Tooltip = 'Plays animation with hit attempt'
+    })
+ 
+end)
+
+local Attacking = false
+ 
+run(function()
+    local BetterKillaura, Targets, Sort, Range, UpdateRate, AngleSlider, MaxTargets
+    local Mouse, Swing, GUI, BoxColor, ParticleTexture, ParticleColor1, ParticleColor2
+    local ParticleSize, Face, Animation, AnimationMode, AnimationSpeed, AnimationTween
+    local Limit, LegitAura, Sync
+    local Particles, Boxes = {}, {}
+    local anims, AnimDelay, AnimTween, armC0 = vape.Libraries.auraanims, tick()
+    local AttackRemote = {FireServer = function() end}
+ 
+    task.spawn(function()
+        AttackRemote = bedwars.Client:Get(remotes.AttackEntity).instance
+    end)
+ 
+    local function calculateRange(range)
+        return math.clamp(range, 1, 20) * 1.5
+    end
+ 
+    local function performAttack(sword, meta, target, selfpos)
+        local delta = (target.RootPart.Position - selfpos)
+        local dir = CFrame.lookAt(selfpos, target.RootPart.Position).LookVector
+        local pos = selfpos + dir * math.max(delta.Magnitude - 2, 0)
+ 
+        local attackData = {
+            weapon = sword.tool,
+            chargedAttack = {
+                chargeRatio = 1
+            },
+            entityInstance = target.Character,
+            validate = {
+                raycast = {
+                    cameraPosition = {value = pos},
+                    cursorDirection = {value = dir}
+                },
+                targetPosition = {value = target.RootPart.Position},
+                selfPosition = {value = pos}
+            }
+        }
+ 
+        bedwars.SwordController.lastAttack = workspace:GetServerTimeNow()
+        store.attackReach = delta.Magnitude
+        store.attackReachUpdate = tick() + 1
+ 
+        for i = 1, 90 do
+            AttackRemote:FireServer(attackData)
+            task.wait(0.01)
+        end
+    end
+ 
+    local function getAttackData()
+        if Mouse.Enabled and not inputService:IsMouseButtonPressed(0) then 
+            return false 
+        end
+ 
+        if GUI.Enabled and bedwars.AppController:isLayerOpen(bedwars.UILayers.MAIN) then 
+            return false 
+        end
+ 
+        local sword = Limit.Enabled and store.hand or store.tools.sword
+        if not sword or not sword.tool then 
+            return false 
+        end
+ 
+        local meta = bedwars.ItemMeta[sword.tool.Name]
+        if Limit.Enabled and (store.hand.toolType ~= 'sword' or bedwars.DaoController.chargingMaid) then 
+            return false 
+        end
+ 
+        if LegitAura.Enabled and (tick() - bedwars.SwordController.lastSwing) > 0.1 then 
+            return false 
+        end
+ 
+        return sword, meta
+    end
+ 
+    local function playAttackAnimation(meta)
+        if not Swing.Enabled and AnimDelay <= tick() and not LegitAura.Enabled then
+            AnimDelay = tick() + (meta.sword.respectAttackSpeedForEffects and meta.sword.attackSpeed or (Sync.Enabled and 0.24 or 0.14))
+            bedwars.SwordController:playSwordEffect(meta, 0)
+ 
+            if meta.displayName:find(' Scythe') then
+                bedwars.ScytheController:playLocalAnimation()
+            end
+        end
+    end
+ 
+    local function getTargets(range)
+        return entitylib.AllPosition({
+            Range = calculateRange(range),
+            Wallcheck = Targets.Walls.Enabled or nil,
+            Part = 'RootPart',
+            Players = Targets.Players.Enabled,
+            NPCs = Targets.NPCs.Enabled,
+            Limit = MaxTargets.Value,
+            Sort = sortmethods[Sort.Value]
+        })
+    end
+ 
+    BetterKillaura = vape.Categories.Blatant:CreateModule({
+        Name = 'Better Killaura',
+        Function = function(callback)
+            if callback then
+                if inputService.TouchEnabled then
+                    pcall(function()
+                        lplr.PlayerGui.MobileUI['2'].Visible = Limit.Enabled
+                    end)
+                end
+ 
+                if Animation.Enabled then
+                    local fake = {
+                        Controllers = {
+                            ViewmodelController = {
+                                isVisible = function()
+                                    return not Attacking
+                                end,
+                                playAnimation = function(...)
+                                    if not Attacking then
+                                        bedwars.ViewmodelController:playAnimation(select(2, ...))
+                                    end
+                                end
+                            }
+                        }
+                    }
+                    debug.setupvalue(bedwars.SwordController.playSwordEffect, 6, fake)
+                    debug.setupvalue(bedwars.ScytheController.playLocalAnimation, 3, fake)
+ 
+                    task.spawn(function()
+                        local started = false
+                        repeat
+                            if Attacking then
+                                if not armC0 then
+                                    armC0 = gameCamera.Viewmodel.RightHand.RightWrist.C0
+                                end
+ 
+                                local first = not started
+                                started = true
+ 
+                                if AnimationMode.Value == 'Random' then
+                                    anims.Random = {{CFrame = CFrame.Angles(math.rad(math.random(1, 360)), math.rad(math.random(1, 360)), math.rad(math.random(1, 360))), Time = 0.12}}
+                                end
+ 
+                                for _, v in anims[AnimationMode.Value] do
+                                    AnimTween = tweenService:Create(gameCamera.Viewmodel.RightHand.RightWrist, TweenInfo.new(first and (AnimationTween.Enabled and 0.001 or 0.1) or v.Time / AnimationSpeed.Value, Enum.EasingStyle.Linear), {
+                                        C0 = armC0 * v.CFrame
+                                    })
+                                    AnimTween:Play()
+                                    AnimTween.Completed:Wait()
+                                    first = false
+                                    if (not BetterKillaura.Enabled) or (not Attacking) then break end
+                                end
+                            elseif started then
+                                started = false
+                                AnimTween = tweenService:Create(gameCamera.Viewmodel.RightHand.RightWrist, TweenInfo.new(AnimationTween.Enabled and 0.001 or 0.3, Enum.EasingStyle.Exponential), {
+                                    C0 = armC0
+                                })
+                                AnimTween:Play()
+                            end
+ 
+                            if not started then
+                                task.wait(0.01)
+                            end
+                        until (not BetterKillaura.Enabled) or (not Animation.Enabled)
+                    end)
+                end
+ 
+                repeat
+                    local attacked, sword, meta = {}, getAttackData()
+                    Attacking = false
+                    store.KillauraTarget = nil
+ 
+                    if sword then
+                        local plrs = getTargets(Range.Value)
+                        if #plrs > 0 then
+                            switchItem(sword.tool, 0)
+                            local selfpos = entitylib.character.RootPart.Position
+                            local localfacing = entitylib.character.RootPart.CFrame.LookVector * Vector3.new(1, 0, 1)
+ 
+                            for _, v in plrs do
+                                local delta = (v.RootPart.Position - selfpos)
+                                if delta.Magnitude <= calculateRange(Range.Value) then
+                                    local angle = math.acos(localfacing:Dot((delta * Vector3.new(1, 0, 1)).Unit))
+                                    if angle <= (math.rad(AngleSlider.Value) / 2) then
+                                        table.insert(attacked, v)
+                                        targetinfo.Targets[v] = tick() + 1
+ 
+                                        if not Attacking then
+                                            Attacking = true
+                                            store.KillauraTarget = v
+                                            playAttackAnimation(meta)
+                                        end
+ 
+                                        performAttack(sword, meta, v, selfpos)
+                                    end
+                                end
+                            end
+                        end
+                    end
+ 
+                    for i, v in Boxes do
+                        v.Adornee = attacked[i] and attacked[i].RootPart or nil
+                        if v.Adornee then
+                            v.Color3 = Color3.fromHSV(BoxColor.Hue, BoxColor.Sat, BoxColor.Value)
+                            v.Transparency = 1 - BoxColor.Opacity
+                        end
+                    end
+ 
+                    for i, v in Particles do
+                        v.Position = attacked[i] and attacked[i].RootPart.Position or Vector3.new(9e9, 9e9, 9e9)
+                        v.Parent = attacked[i] and gameCamera or nil
+                    end
+ 
+                    if Face.Enabled and attacked[1] then
+                        local vec = attacked[1].RootPart.Position * Vector3.new(1, 0, 1)
+                        entitylib.character.RootPart.CFrame = CFrame.lookAt(entitylib.character.RootPart.Position, Vector3.new(vec.X, entitylib.character.RootPart.Position.Y, vec.Z))
+                    end
+ 
+                    task.wait(0.01)
+                until not BetterKillaura.Enabled
+            else
+                store.KillauraTarget = nil
+                for _, v in Boxes do
+                    v.Adornee = nil
+                end
+                for _, v in Particles do
+                    v.Parent = nil
+                end
+                if inputService.TouchEnabled then
+                    pcall(function()
+                        lplr.PlayerGui.MobileUI['2'].Visible = true
+                    end)
+                end
+                debug.setupvalue(bedwars.SwordController.playSwordEffect, 6, bedwars.Knit)
+                debug.setupvalue(bedwars.ScytheController.playLocalAnimation, 3, bedwars.Knit)
+                Attacking = false
+                if armC0 then
+                    AnimTween = tweenService:Create(gameCamera.Viewmodel.RightHand.RightWrist, TweenInfo.new(AnimationTween.Enabled and 0.001 or 0.3, Enum.EasingStyle.Exponential), {
+                        C0 = armC0
+                    })
+                    AnimTween:Play()
+                end
+            end
+        end,
+        Tooltip = 'Attack players around you\nwithout aiming at them.'
+    })
+ 
+    Targets = BetterKillaura:CreateTargets({
+        Players = true,
+        NPCs = true,
+        Walls = true
+    })
+ 
+    local methods = {'Damage', 'Distance'}
+    for i in sortmethods do
+        if not table.find(methods, i) then
+            table.insert(methods, i)
+        end
+    end
+ 
+    Range = BetterKillaura:CreateSlider({
+        Name = 'Attack range',
+        Min = 1,
+        Max = 20,
+        Default = 18,
+        Suffix = function(val)
+            return val == 1 and 'stud' or 'studs'
+        end
+    })
+ 
+    AngleSlider = BetterKillaura:CreateSlider({
+        Name = 'Max angle',
+        Min = 1,
+        Max = 360,
+        Default = 360
+    })
+ 
+    UpdateRate = BetterKillaura:CreateSlider({
+        Name = 'Update rate',
+        Min = 1,
+        Max = 120,
+        Default = 60,
+        Suffix = 'hz'
+    })
+ 
+    MaxTargets = BetterKillaura:CreateSlider({
+        Name = 'Max targets',
+        Min = 1,
+        Max = 5,
+        Default = 5
+    })
+ 
+    Sort = BetterKillaura:CreateDropdown({
+        Name = 'Target Mode',
+        List = methods
+    })
+ 
+    Mouse = BetterKillaura:CreateToggle({Name = 'Require mouse down'})
+    Swing = BetterKillaura:CreateToggle({Name = 'No Swing'})
+    GUI = BetterKillaura:CreateToggle({Name = 'GUI check'})
+ 
+    BetterKillaura:CreateToggle({
+        Name = 'Show target',
+        Function = function(callback)
+            BoxColor.Object.Visible = callback
+            if callback then
+                for i = 1, 10 do
+                    local box = Instance.new('BoxHandleAdornment')
+                    box.Adornee = nil
+                    box.AlwaysOnTop = true
+                    box.Size = Vector3.new(3, 5, 3)
+                    box.CFrame = CFrame.new(0, -0.5, 0)
+                    box.ZIndex = 0
+                    box.Parent = vape.gui
+                    Boxes[i] = box
+                end
+            else
+                for _, v in Boxes do
+                    v:Destroy()
+                end
+                table.clear(Boxes)
+            end
+        end
+    })
+ 
+    BoxColor = BetterKillaura:CreateColorSlider({
+        Name = 'Attack Color',
+        Darker = true,
+        DefaultOpacity = 0.5,
+        Visible = false
+    })
+ 
+    Face = BetterKillaura:CreateToggle({Name = 'Face target'})
+ 
+    Animation = BetterKillaura:CreateToggle({
+        Name = 'Custom Animation',
+        Function = function(callback)
+            AnimationMode.Object.Visible = callback
+            AnimationTween.Object.Visible = callback
+            AnimationSpeed.Object.Visible = callback
+            if BetterKillaura.Enabled then
+                BetterKillaura:Toggle()
+                BetterKillaura:Toggle()
+            end
+        end
+    })
+ 
+    local animnames = {}
+    for i in anims do
+        table.insert(animnames, i)
+    end
+ 
+    AnimationMode = BetterKillaura:CreateDropdown({
+        Name = 'Animation Mode',
+        List = animnames,
+        Darker = true,
+        Visible = false
+    })
+ 
+    AnimationSpeed = BetterKillaura:CreateSlider({
+        Name = 'Animation Speed',
+        Min = 0,
+        Max = 2,
+        Default = 1,
+        Decimal = 10,
+        Darker = true,
+        Visible = false
+    })
+ 
+    AnimationTween = BetterKillaura:CreateToggle({
+        Name = 'No Tween',
+        Darker = true,
+        Visible = false
+    })
+ 
+    Limit = BetterKillaura:CreateToggle({
+        Name = 'Limit to items',
+        Function = function(callback)
+            if inputService.TouchEnabled and BetterKillaura.Enabled then
+                pcall(function()
+                    lplr.PlayerGui.MobileUI['2'].Visible = callback
+                end)
+            end
+        end,
+        Tooltip = 'Only attacks when the sword is held'
+    })
+ 
+    LegitAura = BetterKillaura:CreateToggle({
+        Name = 'Swing only',
+        Tooltip = 'Only attacks while swinging manually'
+    })
+ 
+    Sync = BetterKillaura:CreateToggle({
+        Name = 'Synced Animation',
+        Tooltip = 'Plays animation with hit attempt'
+    })
+ 
+end)
+
+local Attacking = false
+ 
+run(function()
+    local LGKillaura, Targets, Sort, Range, UpdateRate, AngleSlider, MaxTargets
+    local Mouse, Swing, GUI, BoxColor, ParticleTexture, ParticleColor1, ParticleColor2
+    local ParticleSize, Face, Animation, AnimationMode, AnimationSpeed, AnimationTween
+    local Limit, LegitAura, Sync
+    local Particles, Boxes = {}, {}
+    local anims, AnimDelay, AnimTween, armC0 = vape.Libraries.auraanims, tick()
+    local AttackRemote = {FireServer = function() end}
+ 
+    task.spawn(function()
+        AttackRemote = bedwars.Client:Get(remotes.AttackEntity).instance
+    end)
+ 
+    local function calculateRange(range)
+        return math.clamp(range, 1, 20) * 1.5
+    end
+ 
+    local function performAttack(sword, meta, target, selfpos)
+        local delta = (target.RootPart.Position - selfpos)
+        local dir = CFrame.lookAt(selfpos, target.RootPart.Position).LookVector
+        local pos = selfpos + dir * math.max(delta.Magnitude - 2, 0)
+ 
+        local attackData = {
+            weapon = sword.tool,
+            chargedAttack = {
+                chargeRatio = 1
+            },
+            entityInstance = target.Character,
+            validate = {
+                raycast = {
+                    cameraPosition = {value = pos},
+                    cursorDirection = {value = dir}
+                },
+                targetPosition = {value = target.RootPart.Position},
+                selfPosition = {value = pos}
+            }
+        }
+ 
+        bedwars.SwordController.lastAttack = workspace:GetServerTimeNow()
+        store.attackReach = delta.Magnitude
+        store.attackReachUpdate = tick() + 1
+ 
+        for i = 1, 42 do
+            AttackRemote:FireServer(attackData)
+            task.wait(0.01)
+        end
+    end
+ 
+    local function getAttackData()
+        if Mouse.Enabled and not inputService:IsMouseButtonPressed(0) then 
+            return false 
+        end
+ 
+        if GUI.Enabled and bedwars.AppController:isLayerOpen(bedwars.UILayers.MAIN) then 
+            return false 
+        end
+ 
+        local sword = Limit.Enabled and store.hand or store.tools.sword
+        if not sword or not sword.tool then 
+            return false 
+        end
+ 
+        local meta = bedwars.ItemMeta[sword.tool.Name]
+        if Limit.Enabled and (store.hand.toolType ~= 'sword' or bedwars.DaoController.chargingMaid) then 
+            return false 
+        end
+ 
+        if LegitAura.Enabled and (tick() - bedwars.SwordController.lastSwing) > 0.1 then 
+            return false 
+        end
+ 
+        return sword, meta
+    end
+ 
+    local function playAttackAnimation(meta)
+        if not Swing.Enabled and AnimDelay <= tick() and not LegitAura.Enabled then
+            AnimDelay = tick() + (meta.sword.respectAttackSpeedForEffects and meta.sword.attackSpeed or (Sync.Enabled and 0.24 or 0.14))
+            bedwars.SwordController:playSwordEffect(meta, 0)
+ 
+            if meta.displayName:find(' Scythe') then
+                bedwars.ScytheController:playLocalAnimation()
+            end
+        end
+    end
+ 
+    local function getTargets(range)
+        return entitylib.AllPosition({
+            Range = calculateRange(range),
+            Wallcheck = Targets.Walls.Enabled or nil,
+            Part = 'RootPart',
+            Players = Targets.Players.Enabled,
+            NPCs = Targets.NPCs.Enabled,
+            Limit = MaxTargets.Value,
+            Sort = sortmethods[Sort.Value]
+        })
+    end
+ 
+    LGKillaura = vape.Categories.Blatant:CreateModule({
+        Name = 'LGKillaura',
+        Function = function(callback)
+            if callback then
+                if inputService.TouchEnabled then
+                    pcall(function()
+                        lplr.PlayerGui.MobileUI['2'].Visible = Limit.Enabled
+                    end)
+                end
+ 
+                if Animation.Enabled then
+                    local fake = {
+                        Controllers = {
+                            ViewmodelController = {
+                                isVisible = function()
+                                    return not Attacking
+                                end,
+                                playAnimation = function(...)
+                                    if not Attacking then
+                                        bedwars.ViewmodelController:playAnimation(select(2, ...))
+                                    end
+                                end
+                            }
+                        }
+                    }
+                    debug.setupvalue(bedwars.SwordController.playSwordEffect, 6, fake)
+                    debug.setupvalue(bedwars.ScytheController.playLocalAnimation, 3, fake)
+ 
+                    task.spawn(function()
+                        local started = false
+                        repeat
+                            if Attacking then
+                                if not armC0 then
+                                    armC0 = gameCamera.Viewmodel.RightHand.RightWrist.C0
+                                end
+ 
+                                local first = not started
+                                started = true
+ 
+                                if AnimationMode.Value == 'Random' then
+                                    anims.Random = {{CFrame = CFrame.Angles(math.rad(math.random(1, 360)), math.rad(math.random(1, 360)), math.rad(math.random(1, 360))), Time = 0.12}}
+                                end
+ 
+                                for _, v in anims[AnimationMode.Value] do
+                                    AnimTween = tweenService:Create(gameCamera.Viewmodel.RightHand.RightWrist, TweenInfo.new(first and (AnimationTween.Enabled and 0.001 or 0.1) or v.Time / AnimationSpeed.Value, Enum.EasingStyle.Linear), {
+                                        C0 = armC0 * v.CFrame
+                                    })
+                                    AnimTween:Play()
+                                    AnimTween.Completed:Wait()
+                                    first = false
+                                    if (not LGKillaura.Enabled) or (not Attacking) then break end
+                                end
+                            elseif started then
+                                started = false
+                                AnimTween = tweenService:Create(gameCamera.Viewmodel.RightHand.RightWrist, TweenInfo.new(AnimationTween.Enabled and 0.001 or 0.3, Enum.EasingStyle.Exponential), {
+                                    C0 = armC0
+                                })
+                                AnimTween:Play()
+                            end
+ 
+                            if not started then
+                                task.wait(0.01)
+                            end
+                        until (not LGKillaura.Enabled) or (not Animation.Enabled)
+                    end)
+                end
+ 
+                repeat
+                    local attacked, sword, meta = {}, getAttackData()
+                    Attacking = false
+                    store.KillauraTarget = nil
+ 
+                    if sword then
+                        local plrs = getTargets(Range.Value)
+                        if #plrs > 0 then
+                            switchItem(sword.tool, 0)
+                            local selfpos = entitylib.character.RootPart.Position
+                            local localfacing = entitylib.character.RootPart.CFrame.LookVector * Vector3.new(1, 0, 1)
+ 
+                            for _, v in plrs do
+                                local delta = (v.RootPart.Position - selfpos)
+                                if delta.Magnitude <= calculateRange(Range.Value) then
+                                    local angle = math.acos(localfacing:Dot((delta * Vector3.new(1, 0, 1)).Unit))
+                                    if angle <= (math.rad(AngleSlider.Value) / 2) then
+                                        table.insert(attacked, v)
+                                        targetinfo.Targets[v] = tick() + 1
+ 
+                                        if not Attacking then
+                                            Attacking = true
+                                            store.KillauraTarget = v
+                                            playAttackAnimation(meta)
+                                        end
+ 
+                                        performAttack(sword, meta, v, selfpos)
+                                    end
+                                end
+                            end
+                        end
+                    end
+ 
+                    for i, v in Boxes do
+                        v.Adornee = attacked[i] and attacked[i].RootPart or nil
+                        if v.Adornee then
+                            v.Color3 = Color3.fromHSV(BoxColor.Hue, BoxColor.Sat, BoxColor.Value)
+                            v.Transparency = 1 - BoxColor.Opacity
+                        end
+                    end
+ 
+                    for i, v in Particles do
+                        v.Position = attacked[i] and attacked[i].RootPart.Position or Vector3.new(9e9, 9e9, 9e9)
+                        v.Parent = attacked[i] and gameCamera or nil
+                    end
+ 
+                    if Face.Enabled and attacked[1] then
+                        local vec = attacked[1].RootPart.Position * Vector3.new(1, 0, 1)
+                        entitylib.character.RootPart.CFrame = CFrame.lookAt(entitylib.character.RootPart.Position, Vector3.new(vec.X, entitylib.character.RootPart.Position.Y, vec.Z))
+                    end
+ 
+                    task.wait(0.01)
+                until not LGKillaura.Enabled
+            else
+                store.KillauraTarget = nil
+                for _, v in Boxes do
+                    v.Adornee = nil
+                end
+                for _, v in Particles do
+                    v.Parent = nil
+                end
+                if inputService.TouchEnabled then
+                    pcall(function()
+                        lplr.PlayerGui.MobileUI['2'].Visible = true
+                    end)
+                end
+                debug.setupvalue(bedwars.SwordController.playSwordEffect, 6, bedwars.Knit)
+                debug.setupvalue(bedwars.ScytheController.playLocalAnimation, 3, bedwars.Knit)
+                Attacking = false
+                if armC0 then
+                    AnimTween = tweenService:Create(gameCamera.Viewmodel.RightHand.RightWrist, TweenInfo.new(AnimationTween.Enabled and 0.001 or 0.3, Enum.EasingStyle.Exponential), {
+                        C0 = armC0
+                    })
+                    AnimTween:Play()
+                end
+            end
+        end,
+        Tooltip = 'Attack players around you\nwithout aiming at them.'
+    })
+ 
+    Targets = LGKillaura:CreateTargets({
+        Players = true,
+        NPCs = true,
+        Walls = true
+    })
+ 
+    local methods = {'Damage', 'Distance'}
+    for i in sortmethods do
+        if not table.find(methods, i) then
+            table.insert(methods, i)
+        end
+    end
+ 
+    Range = LGKillaura:CreateSlider({
+        Name = 'Attack range',
+        Min = 1,
+        Max = 20,
+        Default = 18,
+        Suffix = function(val)
+            return val == 1 and 'stud' or 'studs'
+        end
+    })
+ 
+    AngleSlider = LGKillaura:CreateSlider({
+        Name = 'Max angle',
+        Min = 1,
+        Max = 360,
+        Default = 360
+    })
+ 
+    UpdateRate = LGKillaura:CreateSlider({
+        Name = 'Update rate',
+        Min = 1,
+        Max = 120,
+        Default = 60,
+        Suffix = 'hz'
+    })
+ 
+    MaxTargets = LGKillaura:CreateSlider({
+        Name = 'Max targets',
+        Min = 1,
+        Max = 5,
+        Default = 5
+    })
+ 
+    Sort = LGKillaura:CreateDropdown({
+        Name = 'Target Mode',
+        List = methods
+    })
+ 
+    Mouse = LGKillaura:CreateToggle({Name = 'Require mouse down'})
+    Swing = LGKillaura:CreateToggle({Name = 'No Swing'})
+    GUI = LGKillaura:CreateToggle({Name = 'GUI check'})
+ 
+    LGKillaura:CreateToggle({
+        Name = 'Show target',
+        Function = function(callback)
+            BoxColor.Object.Visible = callback
+            if callback then
+                for i = 1, 10 do
+                    local box = Instance.new('BoxHandleAdornment')
+                    box.Adornee = nil
+                    box.AlwaysOnTop = true
+                    box.Size = Vector3.new(3, 5, 3)
+                    box.CFrame = CFrame.new(0, -0.5, 0)
+                    box.ZIndex = 0
+                    box.Parent = vape.gui
+                    Boxes[i] = box
+                end
+            else
+                for _, v in Boxes do
+                    v:Destroy()
+                end
+                table.clear(Boxes)
+            end
+        end
+    })
+ 
+    BoxColor = LGKillaura:CreateColorSlider({
+        Name = 'Attack Color',
+        Darker = true,
+        DefaultOpacity = 0.5,
+        Visible = false
+    })
+ 
+    Face = LGKillaura:CreateToggle({Name = 'Face target'})
+ 
+    Animation = LGKillaura:CreateToggle({
+        Name = 'Custom Animation',
+        Function = function(callback)
+            AnimationMode.Object.Visible = callback
+            AnimationTween.Object.Visible = callback
+            AnimationSpeed.Object.Visible = callback
+            if LGKillaura.Enabled then
+                LGKillaura:Toggle()
+                LGKillaura:Toggle()
+            end
+        end
+    })
+ 
+    local animnames = {}
+    for i in anims do
+        table.insert(animnames, i)
+    end
+ 
+    AnimationMode = LGKillaura:CreateDropdown({
+        Name = 'Animation Mode',
+        List = animnames,
+        Darker = true,
+        Visible = false
+    })
+ 
+    AnimationSpeed = LGKillaura:CreateSlider({
+        Name = 'Animation Speed',
+        Min = 0,
+        Max = 2,
+        Default = 1,
+        Decimal = 10,
+        Darker = true,
+        Visible = false
+    })
+ 
+    AnimationTween = LGKillaura:CreateToggle({
+        Name = 'No Tween',
+        Darker = true,
+        Visible = false
+    })
+ 
+    Limit = LGKillaura:CreateToggle({
+        Name = 'Limit to items',
+        Function = function(callback)
+            if inputService.TouchEnabled and LGKillaura.Enabled then
+                pcall(function()
+                    lplr.PlayerGui.MobileUI['2'].Visible = callback
+                end)
+            end
+        end,
+        Tooltip = 'Only attacks when the sword is held'
+    })
+ 
+    LegitAura = LGKillaura:CreateToggle({
+        Name = 'Swing only',
+        Tooltip = 'Only attacks while swinging manually'
+    })
+ 
+    Sync = LGKillaura:CreateToggle({
+        Name = 'Synced Animation',
+        Tooltip = 'Plays animation with hit attempt'
+    })
+ 
 end)
