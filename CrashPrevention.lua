@@ -1,194 +1,278 @@
--- Triple's Anti-Crash v2
+-- Triple's Anti-Crash
 -- Updated on 4/6/25
--- Lightweight crash prevention
+-- Prevents game crashes and memory leaks
 
 local AntiCrash = {}
-local IsEnabled = false
-local ProtectedRemotes = {}
-local RemoteCallCounts = {}
-local LastCleanup = tick()
-local LastMemoryCheck = tick()
+local OriginalFunctions = {}
+local ProtectedInstances = {}
 local ErrorCount = 0
 local LastErrorTime = 0
+local MaxErrorsPerMinute = 30
+local IsEnabled = true
+local MemoryThreshold = 1800000000
+local LastMemoryCheck = 0
+local MemoryCheckInterval = 5
+local Executor = identifyexecutor and identifyexecutor() or "Unknown"
 
--- Configuration
-local MAX_REMOTE_CALLS_PER_SECOND = 50
-local MEMORY_CHECK_INTERVAL = 10
-local MEMORY_THRESHOLD = 1500000 -- in KB
-local MAX_ERRORS_PER_MINUTE = 30
-
--- Safely execute a function
-local function SafeCall(func, ...)
-    local success, result = pcall(func, ...)
-    return success and result or nil
+-- Helper functions
+local function SafePcall(fn, ...)
+    local s, r = pcall(fn, ...)
+    return s and r or nil
 end
 
--- Monitor and limit remote calls
-local function SetupRemoteProtection()
-    local oldNamecall
+local function HookMethod(instance, methodName, customFunction)
+    if not instance or typeof(instance) ~= "Instance" then return end
     
-    -- Only set up if we haven't already
-    if not getgenv().AntiCrashNamecallHooked then
-        getgenv().AntiCrashNamecallHooked = true
-        
-        -- Hook namecall method
-        oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-            local method = getnamecallmethod()
-            local args = {...}
-            
-            -- Only monitor FireServer and InvokeServer
-            if (method == "FireServer" or method == "InvokeServer") and IsEnabled then
-                local remotePath = tostring(self)
-                local currentTime = tick()
-                
-                -- Initialize tracking for this remote if needed
-                if not RemoteCallCounts[remotePath] then
-                    RemoteCallCounts[remotePath] = {
-                        count = 0,
-                        lastReset = currentTime
-                    }
-                end
-                
-                local remoteData = RemoteCallCounts[remotePath]
-                
-                -- Reset counter if it's been more than a second
-                if currentTime - remoteData.lastReset >= 1 then
-                    remoteData.count = 0
-                    remoteData.lastReset = currentTime
-                end
-                
-                -- Increment call count
-                remoteData.count = remoteData.count + 1
-                
-                -- Block if too many calls
-                if remoteData.count > MAX_REMOTE_CALLS_PER_SECOND then
-                    return nil
-                end
-            end
-            
-            -- Call original method
-            return oldNamecall(self, ...)
+    if not OriginalFunctions[instance] then 
+        OriginalFunctions[instance] = {} 
+    end
+    
+    local originalFunction = instance[methodName]
+    OriginalFunctions[instance][methodName] = originalFunction
+    
+    instance[methodName] = function(...)
+        local args = {...}
+        local success, result = pcall(function() 
+            return customFunction(originalFunction, unpack(args)) 
         end)
+        
+        if not success and IsEnabled then
+            ErrorCount = ErrorCount + 1
+            if tick() - LastErrorTime > 60 then
+                ErrorCount = 1
+                LastErrorTime = tick()
+            elseif ErrorCount > MaxErrorsPerMinute then
+                return nil
+            end
+        end
+        
+        return success and result or nil
     end
 end
 
--- Monitor memory usage and clean up if needed
-local function MonitorMemory()
-    local currentTime = tick()
+local function ProtectInstance(instance)
+    if not instance or typeof(instance) ~= "Instance" or ProtectedInstances[instance] then return end
     
-    -- Only check periodically
-    if currentTime - LastMemoryCheck < MEMORY_CHECK_INTERVAL then
-        return
+    ProtectedInstances[instance] = true
+    
+    -- Prevent destruction of critical instances
+    HookMethod(instance, "Destroy", function(original, ...)
+        if IsEnabled and (instance.ClassName == "Player" or instance.ClassName == "Workspace" or 
+                         instance.ClassName == "CoreGui" or instance.ClassName == "Players") then
+            return nil
+        end
+        return original(...)
+    end)
+    
+    -- Prevent removal of critical instances
+    HookMethod(instance, "Remove", function(original, ...)
+        if IsEnabled and (instance.ClassName == "Player" or instance.ClassName == "Workspace" or 
+                         instance.ClassName == "CoreGui" or instance.ClassName == "Players") then
+            return nil
+        end
+        return original(...)
+    end)
+    
+    -- Recursively protect children
+    for _, child in pairs(instance:GetChildren()) do 
+        ProtectInstance(child) 
     end
     
-    LastMemoryCheck = currentTime
-    local memoryUsage = gcinfo() -- in KB
+    -- Protect future children
+    instance.ChildAdded:Connect(function(child) 
+        ProtectInstance(child) 
+    end)
+end
+
+local function MonitorMemory()
+    if tick() - LastMemoryCheck < MemoryCheckInterval then return end
     
-    -- Force garbage collection if memory usage is too high
-    if memoryUsage > MEMORY_THRESHOLD then
+    LastMemoryCheck = tick()
+    local memoryUsage = gcinfo() * 1024
+    
+    if memoryUsage > MemoryThreshold then
         collectgarbage("collect")
     end
 end
 
--- Protect critical instances from being destroyed
-local function ProtectCriticalInstances()
-    local criticalInstances = {
-        game:GetService("Players"),
-        game:GetService("Workspace"),
-        game:GetService("CoreGui"),
-        game:GetService("ReplicatedStorage")
-    }
+local function SafeConnect(signal, callback)
+    local success, result = pcall(function()
+        return signal:Connect(function(...)
+            task.spawn(function() 
+                pcall(callback, ...) 
+            end)
+        end)
+    end)
     
-    for _, instance in pairs(criticalInstances) do
-        -- Use property changed signal to detect and prevent destruction
-        instance.Changed:Connect(function(property)
-            if property == "Parent" and instance.Parent == nil and IsEnabled then
-                -- Try to restore the instance
-                SafeCall(function()
-                    instance.Parent = game
+    return success and result or nil
+end
+
+local function SelfHealHooks()
+    for instance, methods in pairs(OriginalFunctions) do
+        if typeof(instance) == "Instance" and instance:IsDescendantOf(game) then
+            for methodName, original in pairs(methods) do
+                SafePcall(function()
+                    if instance[methodName] ~= original then
+                        instance[methodName] = original
+                    end
                 end)
             end
-        end)
+        end
     end
 end
 
--- Override error function to prevent script termination from excessive errors
-local function SetupErrorHandling()
-    -- Store original functions
-    local originalError = error
-    local originalAssert = assert
+-- Main functionality
+function AntiCrash:Enable()
+    IsEnabled = true
     
-    -- Override error
-    error = function(message, level)
-        if IsEnabled then
-            ErrorCount = ErrorCount + 1
-            local currentTime = tick()
+    -- Protect critical services
+    local services = {
+        game:GetService("Workspace"),
+        game:GetService("Players"),
+        game:GetService("CoreGui"),
+        game:GetService("ReplicatedStorage"),
+        game:GetService("RunService"),
+        game:GetService("UserInputService"),
+        game:GetService("GuiService"),
+        game:GetService("Lighting"),
+        game:GetService("StarterGui")
+    }
+    
+    for _, service in pairs(services) do 
+        ProtectInstance(service) 
+    end
+    
+    -- Hook namecall to prevent remote spam
+    local mt = getrawmetatable(game)
+    local oldNamecall = mt.__namecall
+    setreadonly(mt, false)
+    
+    mt.__namecall = newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+        
+        if (method == "FireServer" or method == "InvokeServer") and IsEnabled then
+            local callCount = self._antiCrashCallCount or 0
+            local lastCallTime = self._antiCrashLastCall or 0
             
-            -- Reset error count if it's been more than a minute
-            if currentTime - LastErrorTime > 60 then
-                ErrorCount = 1
-                LastErrorTime = currentTime
+            if tick() - lastCallTime < 1 then
+                callCount = callCount + 1
+            else
+                callCount = 1
             end
             
-            -- If too many errors, suppress them
-            if ErrorCount > MAX_ERRORS_PER_MINUTE then
+            self._antiCrashCallCount = callCount
+            self._antiCrashLastCall = tick()
+            
+            if callCount > 60 then 
+                return nil 
+            end
+        end
+        
+        return oldNamecall(self, ...)
+    end)
+    
+    setreadonly(mt, true)
+    
+    -- Hook error function
+    local oldError = error
+    error = function(...)
+        if IsEnabled then
+            ErrorCount = ErrorCount + 1
+            
+            if tick() - LastErrorTime > 60 then
+                ErrorCount = 1
+                LastErrorTime = tick()
+            elseif ErrorCount > MaxErrorsPerMinute then
                 return
             end
         end
         
-        -- Call original error function
-        return originalError(message, level)
+        return oldError(...)
     end
     
-    -- Override assert
-    assert = function(condition, message, ...)
-        if not condition and IsEnabled then
+    -- Hook assert function
+    local oldAssert = assert
+    assert = function(cond, ...)
+        if not cond and IsEnabled then
             ErrorCount = ErrorCount + 1
-            local currentTime = tick()
             
-            -- Reset error count if it's been more than a minute
-            if currentTime - LastErrorTime > 60 then
+            if tick() - LastErrorTime > 60 then
                 ErrorCount = 1
-                LastErrorTime = currentTime
-            end
-            
-            -- If too many errors, make assert pass
-            if ErrorCount > MAX_ERRORS_PER_MINUTE then
+                LastErrorTime = tick()
+            elseif ErrorCount > MaxErrorsPerMinute then
                 return true
             end
         end
         
-        -- Call original assert function
-        return originalAssert(condition, message, ...)
+        return oldAssert(cond, ...)
     end
-end
-
--- Main enable function
-function AntiCrash:Enable()
-    -- Don't re-enable if already enabled
-    if IsEnabled then return end
     
-    IsEnabled = true
+    -- Monitor memory usage
+    SafeConnect(game:GetService("RunService").Heartbeat, MonitorMemory)
     
-    -- Set up protections
-    SafeCall(SetupRemoteProtection)
-    SafeCall(ProtectCriticalInstances)
-    SafeCall(SetupErrorHandling)
+    -- Protect RunService connections
+    task.spawn(function()
+        while IsEnabled do
+            pcall(function()
+                for _, conn in pairs(getconnections(game:GetService("RunService").Heartbeat)) do
+                    if conn.Function and not conn._antiCrashProtected then
+                        local originalFunction = conn.Function
+                        
+                        conn.Function = function(...)
+                            local success, result = pcall(function() 
+                                return originalFunction(...) 
+                            end)
+                            
+                            return success and result or nil
+                        end
+                        
+                        conn._antiCrashProtected = true
+                    end
+                end
+            end)
+            
+            SelfHealHooks()
+            task.wait(5)
+        end
+    end)
     
-    -- Set up periodic memory monitoring
-    SafeCall(function()
-        game:GetService("RunService").Heartbeat:Connect(function()
-            if IsEnabled then
-                MonitorMemory()
-            end
-        end)
+    -- Monitor player scripts for errors
+    task.spawn(function()
+        while IsEnabled do
+            task.wait(1)
+            
+            pcall(function()
+                for _, plr in pairs(game:GetService("Players"):GetPlayers()) do
+                    for _, obj in pairs(plr:GetDescendants()) do
+                        if (obj:IsA("Script") or obj:IsA("LocalScript")) and not obj._antiCrashProtected then
+                            obj._antiCrashProtected = true
+                            
+                            pcall(function()
+                                obj.Error:Connect(function()
+                                    if IsEnabled then
+                                        ErrorCount = ErrorCount + 1
+                                        
+                                        if tick() - LastErrorTime > 60 then
+                                            ErrorCount = 1
+                                            LastErrorTime = tick()
+                                        elseif ErrorCount > MaxErrorsPerMinute then
+                                            return
+                                        end
+                                    end
+                                end)
+                            end)
+                        end
+                    end
+                end
+            end)
+        end
     end)
     
     -- Notify user
-    SafeCall(function()
+    pcall(function()
         game:GetService("StarterGui"):SetCore("SendNotification", {
             Title = "Triple's Anti-Crash",
-            Text = "Protection enabled",
+            Text = "Protection enabled successfully!",
             Duration = 3
         })
     end)
@@ -196,19 +280,25 @@ function AntiCrash:Enable()
     return true
 end
 
--- Main disable function
 function AntiCrash:Disable()
     IsEnabled = false
     
-    -- Clear tracking data
-    RemoteCallCounts = {}
-    ErrorCount = 0
+    -- Restore original functions
+    for instance, methods in pairs(OriginalFunctions) do
+        if typeof(instance) == "Instance" and instance:IsDescendantOf(game) then
+            for methodName, original in pairs(methods) do
+                pcall(function()
+                    instance[methodName] = original
+                end)
+            end
+        end
+    end
     
-    -- Force garbage collection
-    collectgarbage("collect")
+    OriginalFunctions = {}
+    ProtectedInstances = {}
     
     -- Notify user
-    SafeCall(function()
+    pcall(function()
         game:GetService("StarterGui"):SetCore("SendNotification", {
             Title = "Triple's Anti-Crash",
             Text = "Protection disabled",
@@ -219,7 +309,7 @@ function AntiCrash:Disable()
     return true
 end
 
--- Initialize
+-- Initialize protection
 AntiCrash:Enable()
 
 return AntiCrash
