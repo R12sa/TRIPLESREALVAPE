@@ -1,237 +1,315 @@
--- Crash Prevention Pro - Zero Crash Edition
-local runService = game:GetService("RunService")
-local players = game:GetService("Players")
-local httpService = game:GetService("HttpService")
-local teleportService = game:GetService("TeleportService")
-local lighting = game:GetService("Lighting")
-local localPlayer = players.LocalPlayer
-local lastHeartbeat = tick()
-local crashLog = {}
-local fpsDropTime = 0
-local memOverloadTime = 0
-local freezeCount = 0
-local criticalMemoryThreshold = 450 -- Lower threshold for earlier cleanup
-local freezeThreshold = 4 -- Detect freezes faster
-local fpsThreshold = 20
-local emergencyMode = false
+-- Triple's Anti-Crash
+-- Updated on 4/6/25
+-- Prevents game crashes and memory leaks
 
-local function log(txt)
-    local logMsg = os.date("[%X] ") .. txt
-    table.insert(crashLog, logMsg)
-    print("[Crash Helper] " .. txt)
-    pcall(function()
-        writefile("CrashLog.txt", httpService:JSONEncode(crashLog))
+local AntiCrash = {}
+local OriginalFunctions = {}
+local ProtectedInstances = {}
+local ErrorCount = 0
+local LastErrorTime = 0
+local MaxErrorsPerMinute = 30
+local IsEnabled = true
+local MemoryThreshold = 1800000000
+local LastMemoryCheck = 0
+local MemoryCheckInterval = 5
+local Executor = identifyexecutor and identifyexecutor() or "Unknown"
+
+-- Helper functions
+local function SafePcall(fn, ...)
+    local s, r = pcall(fn, ...)
+    return s and r or nil
+end
+
+local function HookMethod(instance, methodName, customFunction)
+    if not instance or typeof(instance) ~= "Instance" then return end
+    
+    if not OriginalFunctions[instance] then 
+        OriginalFunctions[instance] = {} 
+    end
+    
+    local originalFunction = instance[methodName]
+    OriginalFunctions[instance][methodName] = originalFunction
+    
+    instance[methodName] = function(...)
+        local args = {...}
+        local success, result = pcall(function() 
+            return customFunction(originalFunction, unpack(args)) 
+        end)
+        
+        if not success and IsEnabled then
+            ErrorCount = ErrorCount + 1
+            if tick() - LastErrorTime > 60 then
+                ErrorCount = 1
+                LastErrorTime = tick()
+            elseif ErrorCount > MaxErrorsPerMinute then
+                return nil
+            end
+        end
+        
+        return success and result or nil
+    end
+end
+
+local function ProtectInstance(instance)
+    if not instance or typeof(instance) ~= "Instance" or ProtectedInstances[instance] then return end
+    
+    ProtectedInstances[instance] = true
+    
+    -- Prevent destruction of critical instances
+    HookMethod(instance, "Destroy", function(original, ...)
+        if IsEnabled and (instance.ClassName == "Player" or instance.ClassName == "Workspace" or 
+                         instance.ClassName == "CoreGui" or instance.ClassName == "Players") then
+            return nil
+        end
+        return original(...)
+    end)
+    
+    -- Prevent removal of critical instances
+    HookMethod(instance, "Remove", function(original, ...)
+        if IsEnabled and (instance.ClassName == "Player" or instance.ClassName == "Workspace" or 
+                         instance.ClassName == "CoreGui" or instance.ClassName == "Players") then
+            return nil
+        end
+        return original(...)
+    end)
+    
+    -- Recursively protect children
+    for _, child in pairs(instance:GetChildren()) do 
+        ProtectInstance(child) 
+    end
+    
+    -- Protect future children
+    instance.ChildAdded:Connect(function(child) 
+        ProtectInstance(child) 
     end)
 end
 
-local function safeCollectGarbage(aggressive)
-    local mem = collectgarbage("count") / 1024
-    if mem > criticalMemoryThreshold or aggressive then
-        log("Yo, memory's at " .. math.floor(mem) .. "MB. Time to clean up.")
-        task.wait(0.1)
-        collectgarbage("collect") -- More aggressive collection
-        
-        if aggressive then
-            -- Super aggressive cleanup
-            for i = 1, 3 do
-                collectgarbage("collect")
-                task.wait(0.1)
-            end
-            
-            -- Disable effects to save memory
-            pcall(function()
-                for _, obj in pairs(workspace:GetDescendants()) do
-                    if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Smoke") then
-                        obj.Enabled = false
-                    end
-                end
-                lighting.GlobalShadows = false
+local function MonitorMemory()
+    if tick() - LastMemoryCheck < MemoryCheckInterval then return end
+    
+    LastMemoryCheck = tick()
+    local memoryUsage = gcinfo() * 1024
+    
+    if memoryUsage > MemoryThreshold then
+        collectgarbage("collect")
+    end
+end
+
+local function SafeConnect(signal, callback)
+    local success, result = pcall(function()
+        return signal:Connect(function(...)
+            task.spawn(function() 
+                pcall(callback, ...) 
             end)
-        end
-        
-        task.wait(0.5)
-        log("Memory cleaned. Now at: " .. math.floor(collectgarbage("count") / 1024) .. "MB")
-    end
-end
-
-local function enterEmergencyMode()
-    if emergencyMode then return end
-    emergencyMode = true
-    log("EMERGENCY MODE ACTIVATED - Taking extreme measures to prevent crash")
-    
-    -- Aggressive memory cleanup
-    safeCollectGarbage(true)
-    
-    -- Reduce graphics to minimum
-    pcall(function()
-        settings().Rendering.QualityLevel = 1
-        lighting.GlobalShadows = false
-        
-        -- Disable all sounds
-        for _, sound in pairs(workspace:GetDescendants()) do
-            if sound:IsA("Sound") and sound.Playing then
-                sound.Playing = false
-            end
-        end
-    end)
-    
-    -- Create emergency notification
-    pcall(function()
-        game.StarterGui:SetCore("SendNotification", {
-            Title = "Crash Prevention",
-            Text = "Emergency mode activated to prevent crash",
-            Duration = 5
-        })
-    end)
-end
-
-local function monitorMemory()
-    while task.wait(5) do -- Check more frequently
-        safeCollectGarbage(emergencyMode)
-        
-        -- Check for memory spikes
-        local mem = collectgarbage("count") / 1024
-        if mem > criticalMemoryThreshold * 1.2 then
-            memOverloadTime = memOverloadTime + 1
-            if memOverloadTime >= 2 then
-                log("Memory overload detected! " .. math.floor(mem) .. "MB")
-                enterEmergencyMode()
-                memOverloadTime = 0
-            end
-        else
-            memOverloadTime = 0
-        end
-    end
-end
-
-local function monitorFPS()
-    local frameCount = 0
-    local lastCheck = tick()
-    
-    runService.RenderStepped:Connect(function()
-        frameCount = frameCount + 1
-        local now = tick()
-        
-        if now - lastCheck >= 2 then
-            local fps = frameCount / (now - lastCheck)
-            frameCount = 0
-            lastCheck = now
-            
-            if fps < fpsThreshold then
-                fpsDropTime = fpsDropTime + 1
-                if fpsDropTime >= 2 then
-                    log("FPS is tanking: " .. math.floor(fps) .. " FPS. Taking action.")
-                    
-                    -- Auto-reduce graphics if FPS is really bad
-                    if fps < fpsThreshold * 0.5 then
-                        pcall(function()
-                            local currentQuality = settings().Rendering.QualityLevel
-                            if currentQuality > 1 then
-                                settings().Rendering.QualityLevel = currentQuality - 1
-                                log("Auto-reduced graphics to level " .. (currentQuality - 1))
-                            end
-                        end)
-                    end
-                    
-                    safeCollectGarbage(fpsDropTime >= 4)
-                    fpsDropTime = 0
-                end
-            else
-                fpsDropTime = 0
-            end
-        end
-    end)
-end
-
-local function monitorFreeze()
-    while task.wait(2) do -- Check more frequently
-        if tick() - lastHeartbeat > freezeThreshold then
-            freezeCount = freezeCount + 1
-            log("Yo, game froze. That's " .. freezeCount .. " times now.")
-            
-            -- Force cleanup on freeze
-            safeCollectGarbage(true)
-            
-            if freezeCount >= 2 then -- React faster to freezes
-                log("Multiple freezes detected - Taking emergency action")
-                enterEmergencyMode()
-                freezeCount = 0
-            end
-        else
-            -- Gradually reduce freeze count if no freezes
-            if freezeCount > 0 and tick() - lastHeartbeat > 30 then
-                freezeCount = freezeCount - 1
-            end
-        end
-    end
-end
-
-local function monitorPlayer()
-    while task.wait(5) do -- Check more frequently
-        if not players.LocalPlayer then
-            log("Local player is missing, might crash")
-            task.wait(1)
-            if not players.LocalPlayer then
-                log("Yup, that's a bad one. Trying to recover...")
-                safeCollectGarbage(true)
-            end
-        end
-        
-        -- Also check if character exists when it should
-        if localPlayer and not localPlayer.Character and tick() - (lastRespawn or 0) > 10 then
-            log("Character missing when it should exist - Possible issue")
-        end
-        
-        -- Track respawns
-        if localPlayer and localPlayer.Character then
-            lastRespawn = tick()
-        end
-    end
-end
-
-local function autoReconnect()
-    -- Monitor for disconnection
-    pcall(function()
-        game:GetService("CoreGui").RobloxPromptGui.promptOverlay.ChildAdded:Connect(function(child)
-            if child.Name == "ErrorPrompt" then
-                log("Game crashed with error prompt - Attempting to reconnect")
-                task.wait(5)
-                teleportService:Teleport(game.PlaceId)
-            end
         end)
     end)
     
-    -- Regular check
-    while task.wait(10) do
-        if not localPlayer or not localPlayer.Parent then
-            log("Game crashed or disconnected - Trying to reconnect in 5 seconds...")
-            task.wait(5)
-            teleportService:Teleport(game.PlaceId)
+    return success and result or nil
+end
+
+local function SelfHealHooks()
+    for instance, methods in pairs(OriginalFunctions) do
+        if typeof(instance) == "Instance" and instance:IsDescendantOf(game) then
+            for methodName, original in pairs(methods) do
+                SafePcall(function()
+                    if instance[methodName] ~= original then
+                        instance[methodName] = original
+                    end
+                end)
+            end
         end
     end
 end
 
--- Optimize on startup
-pcall(function()
-    if settings().Rendering.QualityLevel > 7 then
-        settings().Rendering.QualityLevel = 7
-        log("Reduced initial graphics quality for stability")
+-- Main functionality
+function AntiCrash:Enable()
+    IsEnabled = true
+    
+    -- Protect critical services
+    local services = {
+        game:GetService("Workspace"),
+        game:GetService("Players"),
+        game:GetService("CoreGui"),
+        game:GetService("ReplicatedStorage"),
+        game:GetService("RunService"),
+        game:GetService("UserInputService"),
+        game:GetService("GuiService"),
+        game:GetService("Lighting"),
+        game:GetService("StarterGui")
+    }
+    
+    for _, service in pairs(services) do 
+        ProtectInstance(service) 
     end
-end)
+    
+    -- Hook namecall to prevent remote spam
+    local mt = getrawmetatable(game)
+    local oldNamecall = mt.__namecall
+    setreadonly(mt, false)
+    
+    mt.__namecall = newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+        
+        if (method == "FireServer" or method == "InvokeServer") and IsEnabled then
+            local callCount = self._antiCrashCallCount or 0
+            local lastCallTime = self._antiCrashLastCall or 0
+            
+            if tick() - lastCallTime < 1 then
+                callCount = callCount + 1
+            else
+                callCount = 1
+            end
+            
+            self._antiCrashCallCount = callCount
+            self._antiCrashLastCall = tick()
+            
+            if callCount > 60 then 
+                return nil 
+            end
+        end
+        
+        return oldNamecall(self, ...)
+    end)
+    
+    setreadonly(mt, true)
+    
+    -- Hook error function
+    local oldError = error
+    error = function(...)
+        if IsEnabled then
+            ErrorCount = ErrorCount + 1
+            
+            if tick() - LastErrorTime > 60 then
+                ErrorCount = 1
+                LastErrorTime = tick()
+            elseif ErrorCount > MaxErrorsPerMinute then
+                return
+            end
+        end
+        
+        return oldError(...)
+    end
+    
+    -- Hook assert function
+    local oldAssert = assert
+    assert = function(cond, ...)
+        if not cond and IsEnabled then
+            ErrorCount = ErrorCount + 1
+            
+            if tick() - LastErrorTime > 60 then
+                ErrorCount = 1
+                LastErrorTime = tick()
+            elseif ErrorCount > MaxErrorsPerMinute then
+                return true
+            end
+        end
+        
+        return oldAssert(cond, ...)
+    end
+    
+    -- Monitor memory usage
+    SafeConnect(game:GetService("RunService").Heartbeat, MonitorMemory)
+    
+    -- Protect RunService connections
+    task.spawn(function()
+        while IsEnabled do
+            pcall(function()
+                for _, conn in pairs(getconnections(game:GetService("RunService").Heartbeat)) do
+                    if conn.Function and not conn._antiCrashProtected then
+                        local originalFunction = conn.Function
+                        
+                        conn.Function = function(...)
+                            local success, result = pcall(function() 
+                                return originalFunction(...) 
+                            end)
+                            
+                            return success and result or nil
+                        end
+                        
+                        conn._antiCrashProtected = true
+                    end
+                end
+            end)
+            
+            SelfHealHooks()
+            task.wait(5)
+        end
+    end)
+    
+    -- Monitor player scripts for errors
+    task.spawn(function()
+        while IsEnabled do
+            task.wait(1)
+            
+            pcall(function()
+                for _, plr in pairs(game:GetService("Players"):GetPlayers()) do
+                    for _, obj in pairs(plr:GetDescendants()) do
+                        if (obj:IsA("Script") or obj:IsA("LocalScript")) and not obj._antiCrashProtected then
+                            obj._antiCrashProtected = true
+                            
+                            pcall(function()
+                                obj.Error:Connect(function()
+                                    if IsEnabled then
+                                        ErrorCount = ErrorCount + 1
+                                        
+                                        if tick() - LastErrorTime > 60 then
+                                            ErrorCount = 1
+                                            LastErrorTime = tick()
+                                        elseif ErrorCount > MaxErrorsPerMinute then
+                                            return
+                                        end
+                                    end
+                                end)
+                            end)
+                        end
+                    end
+                end
+            end)
+        end
+    end)
+    
+    -- Notify user
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = "Triple's Anti-Crash",
+            Text = "Protection enabled successfully!",
+            Duration = 3
+        })
+    end)
+    
+    return true
+end
 
--- Heartbeat tracker
-runService.Heartbeat:Connect(function()
-    lastHeartbeat = tick()
-end)
+function AntiCrash:Disable()
+    IsEnabled = false
+    
+    -- Restore original functions
+    for instance, methods in pairs(OriginalFunctions) do
+        if typeof(instance) == "Instance" and instance:IsDescendantOf(game) then
+            for methodName, original in pairs(methods) do
+                pcall(function()
+                    instance[methodName] = original
+                end)
+            end
+        end
+    end
+    
+    OriginalFunctions = {}
+    ProtectedInstances = {}
+    
+    -- Notify user
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = "Triple's Anti-Crash",
+            Text = "Protection disabled",
+            Duration = 3
+        })
+    end)
+    
+    return true
+end
 
--- Start monitoring
-task.spawn(monitorMemory)
-task.spawn(monitorFreeze)
-task.spawn(monitorPlayer)
-task.spawn(autoReconnect)
-monitorFPS() -- This one uses RenderStepped directly
+-- Initialize protection
+AntiCrash:Enable()
 
-log("Zero-Crash Prevention System Loaded. You ain't crashing on my watch!")
-
-
-can you make mine better?
+return AntiCrash
