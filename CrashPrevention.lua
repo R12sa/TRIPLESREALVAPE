@@ -6,7 +6,32 @@ local teleportService = game:GetService("TeleportService")
 local lighting = game:GetService("Lighting")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local starterGui = game:GetService("StarterGui")
-local localPlayer = players.LocalPlayer
+
+-- Wait for LocalPlayer to be available
+local localPlayer
+local function getLocalPlayer()
+    if players.LocalPlayer then
+        return players.LocalPlayer
+    end
+    return nil
+end
+
+-- Try to get LocalPlayer, with a timeout
+local startTime = tick()
+while not localPlayer and tick() - startTime < 10 do
+    localPlayer = getLocalPlayer()
+    if not localPlayer then
+        task.wait(0.1)
+    end
+end
+
+-- If we still don't have LocalPlayer, use a different approach
+if not localPlayer then
+    players:GetPropertyChangedSignal("LocalPlayer"):Connect(function()
+        localPlayer = players.LocalPlayer
+    end)
+end
+
 local lastHeartbeat = tick()
 local lastRenderStep = tick()
 local crashLog = {}
@@ -24,6 +49,7 @@ local config = {
     },
     logFile = "CrashPreventionLog.txt"
 }
+
 local stats = {
     fpsDrops = 0,
     memorySpikes = 0,
@@ -176,12 +202,14 @@ local function enterEmergencyMode()
         workspace.StreamingEnabled = true
         
         -- Clear GUIs that might be causing issues
-        for _, gui in pairs(localPlayer.PlayerGui:GetChildren()) do
-            if gui:IsA("ScreenGui") and gui.Name ~= "CoreGui" and gui.Name ~= "RobloxGui" then
-                pcall(function() gui.Enabled = false end)
-                task.delay(5, function() 
-                    pcall(function() gui.Enabled = true end)
-                end)
+        if localPlayer and localPlayer.PlayerGui then
+            for _, gui in pairs(localPlayer.PlayerGui:GetChildren()) do
+                if gui:IsA("ScreenGui") and gui.Name ~= "CoreGui" and gui.Name ~= "RobloxGui" then
+                    pcall(function() gui.Enabled = false end)
+                    task.delay(5, function() 
+                        pcall(function() gui.Enabled = true end)
+                    end)
+                end
             end
         end
     end)
@@ -445,9 +473,9 @@ local function setupConnectionWatcher()
                 
                 -- Check if we're still connected properly
                 local connectionOK = pcall(function()
-                    return game:IsLoaded() and 
-                           players.LocalPlayer and 
-                           players.LocalPlayer.Parent ~= nil and
+                    return game:IsLoaded() and
+                            players.LocalPlayer and
+                            players.LocalPlayer.Parent ~= nil and
                            game:GetService("RunService"):IsRunning()
                 end)
                 
@@ -503,3 +531,37 @@ local function setupConnectionWatcher()
         end)
     end)
 end
+
+-- Initialize heartbeat connection
+runService.Heartbeat:Connect(function()
+    lastHeartbeat = tick()
+end)
+
+-- Start monitoring threads
+task.spawn(monitorMemory)
+task.spawn(monitorFPS)
+task.spawn(monitorFreeze)
+task.spawn(monitorPlayer)
+task.spawn(setupConnectionWatcher)
+
+-- Initial notification
+notifyUser("Crash Prevention", "System initialized and monitoring performance", 3)
+
+log("Crash Prevention Pro initialized successfully", "INFO")
+
+return {
+    getCurrentMemory = getCurrentMemory,
+    getCurrentFPS = getCurrentFPS,
+    forceCleanup = function(level) safeCollectGarbage(level or 2) end,
+    setPerformanceMode = setPerformanceMode,
+    getStats = function() return stats end,
+    getConfig = function() return config end,
+    setConfig = function(newConfig)
+        for k, v in pairs(newConfig) do
+            if config[k] ~= nil then
+                config[k] = v
+            end
+        end
+        return config
+    end
+}
