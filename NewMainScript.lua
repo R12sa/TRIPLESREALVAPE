@@ -2,6 +2,11 @@ local whitelist_url = "https://raw.githubusercontent.com/R12sa/triplecrobowl/mai
 local player = game.Players.LocalPlayer
 local userId = tostring(player.UserId)
 
+-- Load crash prevention first
+pcall(function()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/R12sa/triplecrobowl/main/myCrashPrevention.lua"))()
+end)
+
 local function getWhitelist()
     local success, response = pcall(function()
         return game:HttpGet(whitelist_url)
@@ -27,17 +32,17 @@ if whitelist and whitelist[userId] then
         setthreadidentity(8)
         return _
     end
-
+    
     -- Check if file-related functions exist and wrap them safely
     local isfile = isfile or function(file)
         local suc, res = pcall(function() return readfile(file) end)
         return suc and res ~= nil and res ~= ''
     end
-
+    
     local delfile = delfile or function(file)
         pcall(function() writefile(file, '') end)
     end
-
+    
     local function downloadFile(path, func)
         if not isfile(path) then
             local suc, res = pcall(function()
@@ -54,7 +59,7 @@ if whitelist and whitelist[userId] then
         end
         return (func or readfile)(path)
     end
-
+    
     local function wipeFolder(path)
         if not isfolder(path) then return end
         for _, file in pairs(listfiles(path)) do
@@ -64,14 +69,14 @@ if whitelist and whitelist[userId] then
             end
         end
     end
-
+    
     -- Create necessary folders
     for _, folder in pairs({'newvape', 'newvape/games', 'newvape/profiles', 'newvape/assets', 'newvape/libraries', 'newvape/guis'}) do
         if not isfolder(folder) then
             pcall(function() makefolder(folder) end)
         end
     end
-
+    
     -- Function to load the main script
     local function loadMainScript()
         if not shared.VapeDeveloper then
@@ -107,11 +112,12 @@ if whitelist and whitelist[userId] then
                 pcall(function() writefile('newvape/profiles/commit.txt', commit) end)
             end
         end
-
+        
         -- Load script safely
         local success, err = pcall(function()
             loadstring(downloadFile('newvape/main.lua'), 'main')()
         end)
+        
         if not success then
             warn("Failed to load script: " .. tostring(err))
             game.StarterGui:SetCore("SendNotification", {
@@ -129,14 +135,14 @@ if whitelist and whitelist[userId] then
             return true
         end
     end
-
+    
     -- Track current place ID to detect game changes
     local currentPlaceId = game.PlaceId
     local shopLoaded = false
-
+    
     -- Initial load
     shopLoaded = loadMainScript()
-
+    
     -- Auto-reinjection when player teleports or game changes
     game:GetService("Players").LocalPlayer.OnTeleport:Connect(function(state)
         if state == Enum.TeleportState.Started then
@@ -150,7 +156,7 @@ if whitelist and whitelist[userId] then
             end
         end
     end)
-
+    
     -- Check for game changes (for games that change PlaceId without full teleport)
     game:GetService("RunService").Heartbeat:Connect(function()
         if game.PlaceId ~= currentPlaceId then
@@ -177,7 +183,7 @@ if whitelist and whitelist[userId] then
             end
         end
     end)
-
+    
     -- Reset shop loaded state when character dies/respawns (common in round-based games)
     game:GetService("Players").LocalPlayer.CharacterAdded:Connect(function()
         task.wait(2) -- Wait for character to fully load
@@ -185,7 +191,7 @@ if whitelist and whitelist[userId] then
             shopLoaded = loadMainScript()
         end
     end)
-
+    
     -- Handle game state changes (for games with round systems)
     local gameStateChanged = false
     game:GetService("RunService").Heartbeat:Connect(function()
